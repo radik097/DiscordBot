@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>discord-bot — панель управления</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <h1>🤖 Панель управления</h1>
+  <div class="statusbar">
+    <span id="botTag">—</span>
+    <span id="uptime"></span>
+    <select id="guildSelect"></select>
+    <div class="panel-menu">
+      <button id="panelMenuBtn" title="Показать скрытые панели">☰ Панели</button>
+      <div id="panelMenuList" class="panel-menu-list"></div>
+    </div>
+  </div>
+</header>
+
+<main id="board">
+
+  <article class="panel" data-panel="dashboard" data-icon="🖥️" data-title="Дашборд">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🖥️</span>
+      <span class="panel-title">Дашборд</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div id="guildInfo" class="card"></div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="config" data-icon="⚙️" data-title="Конфиг">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">⚙️</span>
+      <span class="panel-title">Конфиг</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <p class="hint">Редактируй прямо тут. «Проверить» — офлайн-валидация имён ролей/прав/каналов. «Сохранить» — пишет файл на диск бота. «Build»/«Wipe» — применяют конфиг к выбранному серверу в Discord.</p>
+      <textarea id="configEditor" spellcheck="false"></textarea>
+      <div id="configErrors" class="errors"></div>
+      <div class="actions">
+        <button id="btnValidate">Проверить</button>
+        <button id="btnSave">Сохранить</button>
+        <button id="btnBuild" class="primary">Build на выбранном сервере</button>
+        <label><input type="checkbox" id="wipeConfirm" /> подтверждаю удаление всего</label>
+        <button id="btnWipe" class="danger">Wipe на выбранном сервере</button>
+      </div>
+      <pre id="configLog" class="log"></pre>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="music" data-icon="🎵" data-title="Музыка">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🎵</span>
+      <span class="panel-title">Музыка</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="actions">
+        <select id="musicChannel"></select>
+        <input id="musicQuery" placeholder="Ссылка на YouTube или поисковый запрос" style="flex:1; min-width:240px;" />
+        <button id="musicPlay" class="primary">▶️ Включить</button>
+      </div>
+      <div id="musicError" class="errors"></div>
+      <div id="nowPlaying" class="card"></div>
+      <div class="actions">
+        <button id="musicPause">⏸️ Пауза</button>
+        <button id="musicResume">▶️ Продолжить</button>
+        <button id="musicSkip">⏭️ Скип</button>
+        <button id="musicStop" class="danger">⏹️ Стоп</button>
+        <label>Громкость <input type="range" id="musicVolume" min="0" max="200" value="100" /> <span id="musicVolumeLabel">100%</span></label>
+      </div>
+      <h3>Очередь</h3>
+      <ol id="musicQueue"></ol>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="voice" data-icon="🔊" data-title="Войс">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🔊</span>
+      <span class="panel-title">Войс</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="actions">
+        <select id="voiceChannelSelect"></select>
+      </div>
+      <div id="voiceStatus" class="errors"></div>
+      <table id="voiceMembersTable" class="datatable">
+        <thead><tr><th>Участник</th><th>Статус</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="moderation" data-icon="🛡️" data-title="Модерация">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🛡️</span>
+      <span class="panel-title">Модерация</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="modform">
+        <input id="modUserId" placeholder="ID пользователя Discord" />
+        <input id="modReason" placeholder="Причина (необязательно)" />
+        <button data-action="mute">Замьютить</button>
+        <button data-action="jail">В тюрьму</button>
+      </div>
+      <div id="modStatus" class="errors"></div>
+      <div class="modlists">
+        <div>
+          <h3>Muted</h3>
+          <ul id="mutedList"></ul>
+        </div>
+        <div>
+          <h3>Заключеный</h3>
+          <ul id="jailedList"></ul>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="members" data-icon="👥" data-title="Участники">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">👥</span>
+      <span class="panel-title">Участники</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <input id="memberSearch" placeholder="Поиск по нику..." style="margin-bottom:12px; width:100%;" />
+      <table id="membersTable" class="datatable">
+        <thead><tr><th></th><th>Участник</th><th>Роли</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="stats" data-icon="📊" data-title="Статистика">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">📊</span>
+      <span class="panel-title">Статистика</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div id="statsTotal" class="card"></div>
+      <div class="statscols">
+        <div>
+          <h3>Топ участников</h3>
+          <table class="datatable"><thead><tr><th>Участник</th><th>Сообщений</th></tr></thead><tbody id="statsUsers"></tbody></table>
+        </div>
+        <div>
+          <h3>Топ каналов</h3>
+          <table class="datatable"><thead><tr><th>Канал</th><th>Сообщений</th></tr></thead><tbody id="statsChannels"></tbody></table>
+        </div>
+      </div>
+      <h3>Сообщений за 7 дней</h3>
+      <table class="datatable"><thead><tr><th>День</th><th>Сообщений</th></tr></thead><tbody id="statsDays"></tbody></table>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="history" data-icon="🗒️" data-title="История">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🗒️</span>
+      <span class="panel-title">История</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="actions">
+        <select id="historyChannel"></select>
+        <input id="historyLimit" type="number" value="50" min="1" max="500" />
+        <button id="historyLoad">Загрузить</button>
+      </div>
+      <div id="historyList"></div>
+    </div>
+  </article>
+
+</main>
+
+<script src="panels.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

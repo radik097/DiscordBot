@@ -1,0 +1,32 @@
+[Unit]
+Description=Discord Bot Service
+Documentation=file:///app/CLAUDE.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=unless-stopped
+RestartSec=10
+User=root
+
+# Рабочая директория
+WorkingDirectory=/root/discord-bot
+
+# Команда запуска
+ExecStart=/usr/bin/docker-compose -f /root/discord-bot/docker-compose.yml up
+
+# Graceful shutdown
+ExecStop=/usr/bin/docker-compose -f /root/discord-bot/docker-compose.yml down
+TimeoutStopSec=30
+
+# Ограничение ресурсов (опционально)
+MemoryMax=1G
+
+# Логирование
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=discord-bot
+
+[Install]
+WantedBy=multi-user.target
