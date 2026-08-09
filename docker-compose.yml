@@ -1,0 +1,57 @@
+version: "3.8"
+
+services:
+  discord-bot:
+    image: discord-bot:latest
+    container_name: discord-bot
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # Автоматический перезапуск при ошибке и перезагрузке системы
+    restart: unless-stopped
+
+    environment:
+      # Переменные окружения из .env
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      CLIENT_ID: ${CLIENT_ID}
+      GUILD_ID: ${GUILD_ID}
+      WEB_PORT: ${WEB_PORT:-8787}
+
+    # Монтирование директорий для сохранения данных и конфига
+    volumes:
+      # Конфигурация сервера
+      - ./config:/app/config
+      # Данные (история сообщений, состояние плейлиста)
+      - ./data:/app/data
+      # Логи (опционально)
+      - ./logs:/app/logs
+
+    # Проксирование портов
+    ports:
+      - "127.0.0.1:8787:8787"  # Web-панель управления — только с этого компьютера
+
+    # Настройки ресурсов (опционально)
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+    # Переменные для graceful shutdown
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+
+networks:
+  default:
+    driver: bridge
