@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>discord-bot — панель управления</title>
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -12,6 +13,7 @@
     <span id="botTag">—</span>
     <span id="uptime"></span>
     <select id="guildSelect"></select>
+    <button id="phoneConnectBtn" class="phone-connect">📱 Подключить телефон</button>
     <div class="panel-menu">
       <button id="panelMenuBtn" title="Показать скрытые панели">☰ Панели</button>
       <div id="panelMenuList" class="panel-menu-list"></div>
@@ -121,6 +123,7 @@
         <div id="musicSaveDetails" class="hint"></div>
       </div>
       <ol id="musicQueue"></ol>
+      <button id="musicQueueMore" class="queue-more" type="button" hidden>Показать ещё</button>
     </div>
   </article>
 
@@ -139,7 +142,7 @@
       <div class="saved-playlists-header">
         <div>
           <h3>Локальная библиотека <span id="savedPlaylistCount" class="queue-count">0</span></h3>
-          <div class="hint">Плейлисты показаны свёрнутыми. Нажми на имя, чтобы увидеть треки последней версии.</div>
+          <div class="hint">Каждое сохранение имеет собственные ID и имя. Откройте плейлист и нажмите «Переключиться» — позиция предыдущего плейлиста сохранится.</div>
         </div>
         <button id="refreshPlaylists" title="Обновить список">↻</button>
       </div>
@@ -296,7 +299,47 @@
   </form>
 </dialog>
 
+<dialog id="phoneDialog" class="playlist-dialog phone-dialog">
+  <form method="dialog">
+    <div><h2>📱 Подключение телефона</h2><p id="phoneHint" class="hint">Запустите защищённый туннель и отсканируйте QR-код телефоном.</p></div>
+    <div id="phoneQr" class="phone-qr" hidden></div>
+    <a id="phoneUrl" class="phone-url" target="_blank" rel="noreferrer" hidden></a>
+    <section class="phone-devices" aria-labelledby="phoneDevicesTitle">
+      <div class="phone-devices-header">
+        <strong id="phoneDevicesTitle">Подключённые устройства</strong>
+        <button id="phoneResetSessions" type="button" class="danger" hidden>Сбросить все</button>
+      </div>
+      <div id="phoneDevicesList" class="phone-devices-list"><span class="hint">Нет активных сессий.</span></div>
+    </section>
+    <div id="phoneError" class="errors"></div>
+    <div class="dialog-actions phone-actions">
+      <button id="phoneDisable" type="button" class="danger" hidden>Отключить доступ</button>
+      <button id="phoneStart" type="button" class="primary">Создать QR-код</button>
+      <button value="cancel">Закрыть</button>
+    </div>
+  </form>
+</dialog>
+
+<nav id="mobileNav" class="mobile-nav" aria-label="Разделы панели">
+  <button type="button" data-mobile-panel="music"><span>🎵</span>Музыка</button>
+  <button type="button" data-mobile-panel="playlists"><span>💿</span>Плейлисты</button>
+  <button type="button" data-mobile-panel="voice"><span>🔊</span>Войс</button>
+  <button type="button" data-mobile-panel="dashboard"><span>🖥️</span>Сервер</button>
+  <button type="button" id="mobileMoreBtn"><span>•••</span>Ещё</button>
+</nav>
+<div id="mobileMoreMenu" class="mobile-more-menu" hidden>
+  <div class="mobile-more-sheet">
+    <div class="mobile-more-title"><strong>Другие разделы</strong><button type="button" id="mobileMoreClose" aria-label="Закрыть">✕</button></div>
+    <button type="button" data-mobile-panel="config">⚙️ Конфиг</button>
+    <button type="button" data-mobile-panel="moderation">🛡️ Модерация</button>
+    <button type="button" data-mobile-panel="members">👥 Участники</button>
+    <button type="button" data-mobile-panel="stats">📊 Статистика</button>
+    <button type="button" data-mobile-panel="history">🗒️ История</button>
+  </div>
+</div>
+
 <script src="panels.js"></script>
+<script src="mobile.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

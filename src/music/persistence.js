@@ -1,31 +1,32 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-
-const STATE_PATH = new URL("../../data/queue-state.json", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-
-function ensureDir(path) {
-  mkdirSync(dirname(path), { recursive: true });
-}
+import { clearAllSavedQueueStates, clearSavedQueueState, getSavedQueueStates, setSavedQueueState } from "../db.js";
 
 export function saveQueueState(queues) {
   try {
-    ensureDir(STATE_PATH);
     const state = {};
     for (const [guildId, queue] of queues) {
       if (queue.playing || queue.tracks.length > 0) {
         state[guildId] = {
-          playing: queue.playing,
+          version: 2,
+          playing: queue.getPersistedPlaying?.() ?? queue.playing,
           tracks: queue.tracks,
           volume: queue.volume,
+          activePlaylist: queue.activePlaylist ?? null,
           voiceChannelId: queue.connection?.joinConfig?.channelId ?? null,
           textChannelId: queue.textChannelId ?? null,
           savedAt: Date.now(),
         };
       }
     }
-    const temporary = `${STATE_PATH}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify(state, null, 2), "utf-8");
-    renameSync(temporary, STATE_PATH);
+    for (const [guildId, payload] of Object.entries(state)) {
+      setSavedQueueState(guildId, payload.version, payload, payload.savedAt);
+    }
+
+    const activeGuildIds = new Set(Object.keys(state));
+    for (const row of getSavedQueueStates()) {
+      if (!activeGuildIds.has(row.guildId)) {
+        clearSavedQueueState(row.guildId);
+      }
+    }
     console.log(`[persistence] Сохранено состояние ${Object.keys(state).length} очередей`);
   } catch (err) {
     console.error(`[persistence] Ошибка сохранения состояния:`, err.message);
@@ -34,14 +35,15 @@ export function saveQueueState(queues) {
 
 export function loadQueueState() {
   try {
-    const data = readFileSync(STATE_PATH, "utf-8");
-    const state = JSON.parse(data);
+    const state = {};
+    for (const record of getSavedQueueStates()) {
+      if (record.guildId && record.state) {
+        state[record.guildId] = record.state;
+      }
+    }
     console.log(`[persistence] Загружено состояние ${Object.keys(state).length} очередей`);
     return state;
   } catch (err) {
-    if (err.code === "ENOENT") {
-      return {};
-    }
     console.error(`[persistence] Ошибка загрузки состояния:`, err.message);
     return {};
   }
@@ -49,9 +51,7 @@ export function loadQueueState() {
 
 export function clearQueueState() {
   try {
-    if (existsSync(STATE_PATH)) {
-      unlinkSync(STATE_PATH);
-    }
+    clearAllSavedQueueStates();
     console.log(`[persistence] Состояние очередей очищено`);
   } catch (err) {
     console.error(`[persistence] Ошибка очистки состояния:`, err.message);

@@ -3,18 +3,147 @@ let savedGuildId = null;
 try {
   savedGuildId = localStorage.getItem(SELECTED_GUILD_KEY);
 } catch {}
-const state = { guildId: savedGuildId, config: null, playlists: [] };
+const state = {
+  guildId: savedGuildId,
+  config: null,
+  playlists: [],
+  activePlaylistId: null,
+  mobileQueueLimit: 20,
+  csrfToken: null,
+};
+
+function updateMobileQueueWindow() {
+  const items = [...document.querySelectorAll("#musicQueue > li")];
+  const mobile = window.matchMedia("(max-width: 720px)").matches;
+  for (const [index, item] of items.entries()) item.hidden = mobile && index >= state.mobileQueueLimit;
+  const more = document.getElementById("musicQueueMore");
+  more.hidden = !mobile || state.mobileQueueLimit >= items.length;
+  if (!more.hidden) more.textContent = `Показать ещё · ${items.length - state.mobileQueueLimit}`;
+}
+
+document.getElementById("musicQueueMore").addEventListener("click", () => {
+  state.mobileQueueLimit += 25;
+  updateMobileQueueWindow();
+});
+window.matchMedia("(max-width: 720px)").addEventListener("change", updateMobileQueueWindow);
+
+const phoneDialog = document.getElementById("phoneDialog");
+const phoneButton = document.getElementById("phoneConnectBtn");
+const isLocalPanel = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+if (!isLocalPanel) phoneButton.hidden = true;
+
+function renderPhoneAccess(data) {
+  const qr = document.getElementById("phoneQr");
+  const url = document.getElementById("phoneUrl");
+  const disable = document.getElementById("phoneDisable");
+  qr.hidden = !data.qrSvg;
+  qr.innerHTML = data.qrSvg ?? "";
+  url.hidden = !data.publicUrl;
+  url.href = data.publicUrl ?? "#";
+  url.textContent = data.publicUrl ?? "";
+  disable.hidden = !data.enabled;
+  document.getElementById("phoneStart").textContent = data.enabled ? "Новый QR-код" : "Создать QR-код";
+  document.getElementById("phoneHint").textContent = data.pairExpiresAt
+    ? data.qrSvg
+      ? `QR-токен действует до ${new Date(data.pairExpiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}. Перезагрузка страницы не меняет токен — новый создаётся только кнопкой «Новый QR-код». На странице ngrok нажмите «Visit Site», затем подтвердите подключение устройства.`
+      : `Ранее созданный QR-токен продолжает действовать до ${new Date(data.pairExpiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}, но QR не хранится после перезагрузки страницы. Чтобы показать новый QR, нажмите «Новый QR-код».`
+    : data.configured === false
+      ? "Добавьте NGROK_AUTHTOKEN в .env и перезапустите Docker."
+      : "Нажмите «Создать QR-код», затем отсканируйте его телефоном.";
+  renderPhoneDevices(data.devices ?? []);
+}
+
+function renderPhoneDevices(devices) {
+  const list = document.getElementById("phoneDevicesList");
+  const reset = document.getElementById("phoneResetSessions");
+  list.innerHTML = "";
+  reset.hidden = devices.length === 0;
+  if (!devices.length) {
+    const empty = document.createElement("span");
+    empty.className = "hint";
+    empty.textContent = "Нет активных сессий.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const device of devices) {
+    const row = document.createElement("div");
+    row.className = "phone-device";
+    const details = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = device.name;
+    const meta = document.createElement("span");
+    meta.textContent = `Подключено ${new Date(device.createdAt).toLocaleString("ru-RU")} · активно ${new Date(device.lastSeenAt).toLocaleString("ru-RU")}${device.ip ? ` · IP ${device.ip}` : ""}`;
+    details.append(name, meta);
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.className = "danger phone-device-revoke";
+    revoke.dataset.sessionId = device.id;
+    revoke.textContent = "Отключить";
+    row.append(details, revoke);
+    list.appendChild(row);
+  }
+}
+
+phoneButton.addEventListener("click", async () => {
+  document.getElementById("phoneError").textContent = "";
+  phoneDialog.showModal();
+  try { renderPhoneAccess(await api("/api/remote-access")); }
+  catch (err) { document.getElementById("phoneError").textContent = err.message; }
+});
+document.getElementById("phoneStart").addEventListener("click", async () => {
+  const error = document.getElementById("phoneError");
+  error.textContent = "Запускаю защищённый туннель…";
+  try { renderPhoneAccess(await api("/api/remote-access", { method: "POST" })); error.textContent = ""; }
+  catch (err) { error.textContent = err.message; }
+});
+document.getElementById("phoneDisable").addEventListener("click", async () => {
+  const error = document.getElementById("phoneError");
+  try { await api("/api/remote-access", { method: "DELETE" }); renderPhoneAccess({ enabled: false }); error.textContent = "Доступ отключён, мобильные сессии отозваны."; }
+  catch (err) { error.textContent = err.message; }
+});
+document.getElementById("phoneDevicesList").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-session-id]");
+  if (!button) return;
+  const error = document.getElementById("phoneError");
+  button.disabled = true;
+  try {
+    await api(`/api/remote-access/sessions/${encodeURIComponent(button.dataset.sessionId)}`, { method: "DELETE" });
+    renderPhoneAccess(await api("/api/remote-access"));
+    error.textContent = "Сессия устройства сброшена.";
+  } catch (err) { error.textContent = err.message; button.disabled = false; }
+});
+document.getElementById("phoneResetSessions").addEventListener("click", async () => {
+  const error = document.getElementById("phoneError");
+  try {
+    const result = await api("/api/remote-access/sessions", { method: "DELETE" });
+    renderPhoneAccess(await api("/api/remote-access"));
+    error.textContent = `Сброшено сессий: ${result.removed}.`;
+  } catch (err) { error.textContent = err.message; }
+});
 
 async function api(path, opts) {
+  const method = (opts?.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    if (!state.csrfToken) {
+      const tokenPayload = await api("/api/csrf");
+      state.csrfToken = tokenPayload.token || null;
+    }
+  }
+
   const controller = new AbortController();
   const timeoutMs = opts?.timeoutMs ?? (opts?.method && opts.method !== "GET" ? 120000 : 30000);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
+    const headers = { "content-type": "application/json", ...(opts?.headers ?? {}) };
+    if (method !== "GET" && method !== "HEAD" && state.csrfToken) {
+      headers["x-csrf-token"] = state.csrfToken;
+    }
     res = await fetch(path, {
       ...opts,
       signal: opts?.signal ?? controller.signal,
-      headers: { "content-type": "application/json", ...(opts?.headers ?? {}) },
+      method,
+      headers,
     });
   } catch (err) {
     if (err.name === "AbortError") throw new Error(`Таймаут запроса (${Math.round(timeoutMs / 1000)} с)`);
@@ -23,7 +152,18 @@ async function api(path, opts) {
     clearTimeout(timeout);
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || data.errors?.join(", ") || `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (!opts?._retryCsrf && res.status === 403 && method !== "GET" && (data?.error || "").includes("CSRF")) {
+      state.csrfToken = null;
+      const retryToken = await api("/api/csrf");
+      state.csrfToken = retryToken.token || null;
+      return api(path, { ...opts, _retryCsrf: true });
+    }
+    throw new Error(data.error || data.errors?.join(", ") || `HTTP ${res.status}`);
+  }
+  if (data?.token) {
+    state.csrfToken = data.token;
+  }
   return data;
 }
 
@@ -239,15 +379,28 @@ async function loadPlaylistDetails(details, playlistId) {
     body.textContent = "";
     const summary = document.createElement("div");
     summary.className = "hint";
-    summary.textContent = `${playlist.completed || 0} из ${playlist.total || 0} обработано · сохранено ${playlistDate(playlist.updatedAt)}`;
+    const resumeTrack = playlist.playback?.tracks?.[0];
+    const resumeLabel = resumeTrack
+      ? ` · продолжение: ${resumeTrack.title} с ${fmtDuration(resumeTrack.startTimeSec)}`
+      : " · запуск с начала";
+    summary.textContent = `ID: ${playlist.id} · ${playlist.completed || 0} из ${playlist.total || 0} обработано · сохранено ${playlistDate(playlist.updatedAt)}${resumeLabel}`;
+    const actions = document.createElement("div");
+    actions.className = "playlist-actions";
+    const activate = document.createElement("button");
+    activate.type = "button";
+    activate.dataset.activatePlaylistId = playlist.id;
+    activate.textContent = state.activePlaylistId === playlist.id ? "▶ Сейчас играет" : "▶ Переключиться";
+    activate.disabled = state.activePlaylistId === playlist.id;
+    actions.appendChild(activate);
     const tracks = document.createElement("ol");
     tracks.className = "playlist-tracks";
     for (const track of playlist.tracks) {
       const item = document.createElement("li");
-      item.textContent = `${track.title} (${fmtDuration(track.durationSec)}) · ${PLAYLIST_TRACK_STATUS[track.status] ?? track.status ?? "неизвестно"}`;
+      const start = Number(track.startTimeSec) > 0 ? ` · старт ${fmtDuration(track.startTimeSec)}` : "";
+      item.textContent = `${track.title} (${fmtDuration(track.durationSec)})${start} · ${PLAYLIST_TRACK_STATUS[track.status] ?? track.status ?? "неизвестно"}`;
       tracks.appendChild(item);
     }
-    body.append(summary, tracks);
+    body.append(summary, actions, tracks);
     body.dataset.loaded = "true";
   } catch (err) {
     body.textContent = `Ошибка загрузки: ${err.message}`;
@@ -287,8 +440,8 @@ function renderSavedPlaylists(playlists) {
     title.textContent = playlist.title;
     const meta = document.createElement("span");
     meta.className = "playlist-meta";
-    const versionLabel = playlist.versions > 1 ? ` · версий: ${playlist.versions}` : "";
-    meta.textContent = `${playlist.total || 0} треков${versionLabel} · ${playlistDate(playlist.updatedAt)}`;
+    const activeLabel = state.activePlaylistId === playlist.id ? " · ▶ активен" : "";
+    meta.textContent = `ID: ${playlist.id} · ${playlist.total || 0} треков${activeLabel} · ${playlistDate(playlist.updatedAt)}`;
     text.append(title, meta);
     main.append(chevron, text);
 
@@ -317,9 +470,10 @@ async function loadPlaylists() {
   if (!state.guildId) return;
   const guildId = state.guildId;
   try {
-    const { playlists } = await api(`/api/music/${guildId}/playlists`);
+    const { playlists, activePlaylistId } = await api(`/api/music/${guildId}/playlists`);
     if (guildId !== state.guildId) return;
     state.playlists = playlists;
+    state.activePlaylistId = activePlaylistId;
     renderSavedPlaylists(playlists);
     document.getElementById("savedPlaylistsError").textContent = "";
   } catch (err) {
@@ -410,6 +564,7 @@ async function loadMusic() {
     const queueSignature = data.tracks.map((track) => track.queueId || track.url).join("|");
     if (queueSignature !== lastQueueSignature) {
       lastQueueSignature = queueSignature;
+      state.mobileQueueLimit = 20;
       const list = document.getElementById("musicQueue");
       list.innerHTML = "";
       for (const t of data.tracks) {
@@ -442,6 +597,7 @@ async function loadMusic() {
         li.append(info, actions);
         list.appendChild(li);
       }
+      updateMobileQueueWindow();
     }
     document.getElementById("musicQueueCount").textContent = data.tracks.length;
     renderPlaylistSave(data.playlistSave, Boolean(data.playing || data.tracks.length));
@@ -571,6 +727,33 @@ document.getElementById("playlistNameForm").addEventListener("submit", async (ev
 });
 
 document.getElementById("refreshPlaylists").addEventListener("click", () => void loadPlaylists());
+
+document.getElementById("savedPlaylists").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-activate-playlist-id]");
+  if (!button) return;
+  const channelId = document.getElementById("musicChannel").value;
+  const error = document.getElementById("savedPlaylistsError");
+  if (!channelId) {
+    error.textContent = "Выберите голосовой канал в панели «Музыка».";
+    return;
+  }
+  button.disabled = true;
+  error.textContent = "Переключаю плейлист…";
+  try {
+    const result = await api(`/api/music/${state.guildId}/playlists/${encodeURIComponent(button.dataset.activatePlaylistId)}/activate`, {
+      method: "POST",
+      body: JSON.stringify({ channelId }),
+    });
+    error.textContent = result.alreadyActive
+      ? `Плейлист «${result.playlist.title}» уже активен.`
+      : `${result.resumed ? "⏱️ Восстановлен" : "▶️ Запущен"} плейлист «${result.playlist.title}», треков: ${result.addedCount}.`;
+    lastQueueSignature = "";
+    await Promise.all([loadMusic(), loadPlaylists()]);
+  } catch (err) {
+    error.textContent = `Ошибка переключения: ${err.message}`;
+    button.disabled = false;
+  }
+});
 
 setInterval(() => loadMusic(), 1000);
 setInterval(() => void loadPlaylists(), 5000);

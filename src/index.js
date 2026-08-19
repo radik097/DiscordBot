@@ -32,6 +32,7 @@ const client = new Client({
 });
 
 client.commands = new Collection();
+let webServer = null;
 const commandsDir = new URL("./commands/", import.meta.url);
 for (const cmd of await loadCommandModules(commandsDir)) {
   client.commands.set(cmd.data.name, cmd);
@@ -58,7 +59,7 @@ client.once("clientReady", async () => {
   console.log(`Вошёл как ${client.user.tag}`);
   await restoreQueueState(client);
   resumePlaylistSaveJobs();
-  startWebServer(client, WEB_PORT ? Number(WEB_PORT) : 8787);
+  webServer = startWebServer(client, WEB_PORT ? Number(WEB_PORT) : 8787);
 });
 
 client.on("guildMemberAdd", async (member) => {
@@ -178,6 +179,8 @@ async function shutdown(reason, exitCode = 0) {
   shuttingDown = true;
   console.log(`[shutdown] ${reason}, сохраняю состояние и завершаю работу...`);
   saveAllQueues();
+  await webServer?.stopRemoteAccess?.();
+  webServer?.stop?.();
   try {
     await client.destroy();
   } catch (err) {

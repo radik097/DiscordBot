@@ -1,27 +1,31 @@
-import play from "play-dl";
+import { createHash } from "node:crypto";
 import ffmpegPath from "ffmpeg-static";
+import play from "play-dl";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
 import { StreamType } from "@discordjs/voice";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 
 const YTDLP_PATH = (() => {
-  // Windows dev checkout ships bin/yt-dlp.exe; the Docker image (linux) ships
-  // bin/yt-dlp with no extension. Check both before falling back to PATH.
   for (const name of ["yt-dlp.exe", "yt-dlp"]) {
     const local = new URL(`../../bin/${name}`, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
     if (existsSync(local)) return local;
   }
-  return "yt-dlp"; // fall back to a system-installed yt-dlp on PATH
+  return "yt-dlp";
 })();
 
 const CACHE_DIR = fileURLToPath(new URL("../../data/cache/audio/", import.meta.url));
-mkdirSync(CACHE_DIR, { recursive: true });
+await mkdir(CACHE_DIR, { recursive: true });
 const MAX_PLAYLIST_TRACKS = 500;
 const cacheDownloads = new Map();
+
+const MAX_CACHE_FILES = Number(process.env.AUDIO_CACHE_MAX_FILES) || 2000;
+const MAX_CACHE_SIZE_BYTES = Number(process.env.AUDIO_CACHE_MAX_BYTES) || 8 * 1024 * 1024 * 1024;
+const MAX_CACHE_AGE_MS = Number(process.env.AUDIO_CACHE_MAX_AGE_MS) || 14 * 24 * 60 * 60_000;
+const CACHE_PRUNE_BATCH = Number(process.env.AUDIO_CACHE_PRUNE_BATCH) || 16;
 
 const YTDLP_POT_PROVIDER_URL = process.env.YTDLP_POT_PROVIDER_URL?.trim() ?? "";
 const YTDLP_PLAYER_CLIENT = process.env.YTDLP_PLAYER_CLIENT?.trim()
@@ -50,20 +54,42 @@ function optionalYtDlpArgs() {
   return args;
 }
 
-function toTrack(video, requestedBy) {
+export function parseStartTime(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return 0;
+  if (/^\d+$/.test(raw)) return Math.max(0, Number(raw));
+  const clock = raw.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2})$/);
+  if (clock) return (Number(clock[1]) || 0) * 3600 + Number(clock[2]) * 60 + Number(clock[3]);
+  const units = [...raw.matchAll(/(\d+(?:\.\d+)?)(h|m|s)/g)];
+  if (units.length && units.map((match) => match[0]).join("") === raw) {
+    return Math.floor(units.reduce((sum, match) => sum + Number(match[1]) * ({ h: 3600, m: 60, s: 1 }[match[2]]), 0));
+  }
+  return 0;
+}
+
+export function startTimeFromUrl(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    const host = url.hostname.toLowerCase();
+    if (host !== "youtu.be" && host !== "youtube.com" && !host.endsWith(".youtube.com")) return 0;
+    return parseStartTime(url.searchParams.get("t") ?? url.searchParams.get("start"));
+  } catch {
+    return 0;
+  }
+}
+
+function toTrack(video, requestedBy, sourceUrl = video.url) {
   return {
     url: video.url,
     title: video.title ?? video.url,
     durationSec: video.durationInSec ?? 0,
     thumbnail: video.thumbnails?.[0]?.url ?? null,
     requestedBy,
+    startTimeSec: startTimeFromUrl(sourceUrl),
   };
 }
 
 function buildPlaylistUrl(listId, seedVideoId = "", pp = "") {
-  // Dynamic YouTube Mix playlists (RD...) cannot be opened through /playlist.
-  // They must retain a seed video in a /watch URL. For the common RD<videoId>
-  // form, the seed can be recovered directly from the playlist ID.
   if (listId.startsWith("RD")) {
     const derivedSeed = /^RD([A-Za-z0-9_-]{11})$/.exec(listId)?.[1] ?? "";
     const seed = /^[A-Za-z0-9_-]{11}$/.test(seedVideoId) ? seedVideoId : derivedSeed;
@@ -76,7 +102,6 @@ function buildPlaylistUrl(listId, seedVideoId = "", pp = "") {
       return url.href;
     }
   }
-
   return `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
 }
 
@@ -84,11 +109,7 @@ function playlistUrlFromQuery(query) {
   const value = String(query ?? "").trim();
   const direct = value.match(/^list=([A-Za-z0-9_-]{10,128})$/i);
   if (direct) return buildPlaylistUrl(direct[1]);
-
-  // Also accept a bare YouTube playlist ID for convenience.
-  if (/^(?:PL|RD|UU|LL|FL|OLAK5uy)[A-Za-z0-9_-]{8,120}$/.test(value)) {
-    return buildPlaylistUrl(value);
-  }
+  if (/^(?:PL|RD|UU|LL|FL|OLAK5uy)[A-Za-z0-9_-]{8,120}$/.test(value)) return buildPlaylistUrl(value);
 
   try {
     const url = new URL(value);
@@ -99,7 +120,7 @@ function playlistUrlFromQuery(query) {
       return buildPlaylistUrl(listId, url.searchParams.get("v") ?? "", url.searchParams.get("pp") ?? "");
     }
   } catch {
-    // A normal search query is not expected to be a URL.
+    // no-op
   }
   return null;
 }
@@ -139,7 +160,6 @@ export async function resolvePlaylist(query, requestedBy) {
     "--dump-single-json",
     "--skip-download",
     "--ignore-errors",
-    // Read one extra item so we can report that a long playlist was truncated.
     "--playlist-end", String(MAX_PLAYLIST_TRACKS + 1),
     "--js-runtimes", "bun",
     ...optionalYtDlpArgs(),
@@ -158,6 +178,9 @@ export async function resolvePlaylist(query, requestedBy) {
     }];
   }).slice(0, MAX_PLAYLIST_TRACKS);
 
+  const requestedStartTimeSec = startTimeFromUrl(query);
+  if (requestedStartTimeSec > 0 && tracks.length) tracks[0].startTimeSec = requestedStartTimeSec;
+
   return {
     title: info.title || "YouTube playlist",
     url: playlistUrl,
@@ -174,17 +197,14 @@ export async function resolveInput(query, requestedBy) {
   return { kind: "track", tracks: track ? [track] : [] };
 }
 
-// Accepts either a YouTube URL or a free-text search query.
 export async function resolveTrack(query, requestedBy) {
   const validated = await play.validate(query);
 
   if (validated === "yt_video") {
     const info = await play.video_basic_info(query);
-    return toTrack(info.video_details, requestedBy);
+    return toTrack(info.video_details, requestedBy, query);
   }
 
-  // Anything else (plain search text, or a URL type we don't special-case)
-  // goes through search — most reliable path for "search: <query>" style input.
   const results = await play.search(query, { limit: 1, source: { youtube: "video" } });
   if (!results.length) return null;
   return toTrack(results[0], requestedBy);
@@ -194,34 +214,94 @@ function cacheKeyFor(url, quality) {
   return createHash("sha1").update(`${url}|${quality}`).digest("hex");
 }
 
-// Finds an already-downloaded cache file for this key (any extension),
-// ignoring partial ".part" files left behind by an interrupted download.
-function findCachedFile(key) {
+async function inventory() {
+  const entries = await readdir(CACHE_DIR).catch(() => []);
+  const files = [];
+  for (const file of entries) {
+    if (file.endsWith(".part")) continue;
+    const filePath = path.join(CACHE_DIR, file);
+    try {
+      const st = await stat(filePath);
+      if (!st.isFile()) continue;
+      files.push({ file: filePath, size: st.size, mtimeMs: st.mtimeMs });
+    } catch {
+      // no-op
+    }
+  }
+  return files;
+}
+
+async function pruneCache() {
+  const files = await inventory();
+  let current = [...files].sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let totalBytes = current.reduce((sum, entry) => sum + entry.size, 0);
+  let removed = 0;
+
+  const old = current.filter((entry) => Date.now() - entry.mtimeMs > MAX_CACHE_AGE_MS);
+  for (const entry of old) {
+    try {
+      await rm(entry.file, { force: true });
+      removed += 1;
+      totalBytes -= entry.size;
+    } catch {
+      // no-op
+    }
+  }
+  if (old.length) current = current.filter((entry) => !old.includes(entry));
+
+  current.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  const overFiles = Math.max(0, current.length - MAX_CACHE_FILES);
+  if (overFiles > 0) {
+    const toDelete = current.slice(0, overFiles);
+    for (const entry of toDelete) {
+      try {
+        await rm(entry.file, { force: true });
+        removed += 1;
+        totalBytes -= entry.size;
+      } catch {
+        // no-op
+      }
+    }
+    current = current.slice(overFiles);
+  }
+
+  if (totalBytes > MAX_CACHE_SIZE_BYTES) {
+    while (current.length && totalBytes > MAX_CACHE_SIZE_BYTES) {
+      const batch = current.splice(0, CACHE_PRUNE_BATCH);
+      for (const entry of batch) {
+        try {
+          await rm(entry.file, { force: true });
+          removed += 1;
+          totalBytes -= entry.size;
+        } catch {
+          // no-op
+        }
+      }
+    }
+  }
+  if (removed) console.log(`[cache] Очистка кэша: удалено ${removed} файлов, размер теперь ${Math.round(totalBytes / 1024 / 1024)} MB`);
+}
+
+async function findCachedFile(key) {
   const prefix = `${key}.`;
-  const entries = readdirSync(CACHE_DIR);
-  const match = entries.find((f) => f.startsWith(prefix) && !f.endsWith(".part"));
+  const entries = await readdir(CACHE_DIR);
+  const match = entries.find((fileName) => fileName.startsWith(prefix) && !fileName.endsWith(".part"));
   return match ? path.join(CACHE_DIR, match) : null;
 }
 
-export function getAudioCacheEntry(url, quality = "best") {
+export async function getAudioCacheEntry(url, quality = "best") {
   const key = cacheKeyFor(url, quality);
-  const file = findCachedFile(key);
+  const file = await findCachedFile(key);
   if (!file) return null;
-  return {
-    file,
-    fileName: path.basename(file),
-    bytes: statSync(file).size,
-    quality,
-  };
+  const st = await stat(file).catch(() => null);
+  if (!st) return null;
+  return { file, fileName: path.basename(file), bytes: st.size, quality };
 }
 
-function formatMB(bytes) {
+export function formatMB(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2);
 }
 
-// Downloads the audio-only stream to a local file via yt-dlp so repeated
-// plays of the same track are served from disk instead of re-fetched/
-// re-transcoded from the network every time.
 function downloadToCache(url, quality, key) {
   return new Promise((resolve, reject) => {
     const format = quality === "best" ? "bestaudio/best" : "worstaudio/worst";
@@ -238,8 +318,6 @@ function downloadToCache(url, quality, key) {
       [
         "-f", format,
         "--no-playlist",
-        // YouTube requires a JavaScript runtime for signature challenges.
-        // The app itself runs on Bun, so reuse that runtime for yt-dlp.
         "--js-runtimes", "bun",
         ...optionalYtDlpArgs(),
         "--retries", "5",
@@ -257,13 +335,13 @@ function downloadToCache(url, quality, key) {
       clearTimeout(timeout);
       reject(e);
     });
-    child.on("exit", (code) => {
+    child.on("exit", async (code) => {
       clearTimeout(timeout);
       if (code !== 0) {
         reject(new Error(`yt-dlp завершился с кодом ${code} при скачивании в кэш: ${err.trim().slice(-500) || "нет вывода"}`));
         return;
       }
-      const file = findCachedFile(key);
+      const file = await findCachedFile(key);
       if (!file) {
         reject(new Error("yt-dlp завершился успешно, но файл кэша не найден"));
         return;
@@ -273,53 +351,64 @@ function downloadToCache(url, quality, key) {
   });
 }
 
-// Returns a local file path for this track, downloading+caching it first if needed.
 export async function ensureCachedFile(url, quality = "best") {
   const key = cacheKeyFor(url, quality);
-  const existing = findCachedFile(key);
+  const existing = await getAudioCacheEntry(url, quality);
   if (existing) {
-    const sizeMB = formatMB(statSync(existing).size);
-    console.log(`[cache] Использую кэш (${sizeMB} MB): ${path.basename(existing)}`);
-    return existing;
+    const sizeMB = formatMB(existing.bytes);
+    console.log(`[cache] Использую кэш (${sizeMB} MB): ${existing.fileName}`);
+    return existing.file;
   }
 
-  const activeDownload = cacheDownloads.get(key);
-  if (activeDownload) {
+  const existingDownload = cacheDownloads.get(key);
+  if (existingDownload) {
     console.log(`[cache] Уже скачивается, ожидаю общий результат: ${url} (quality=${quality})`);
-    return activeDownload;
+    return existingDownload;
   }
 
-  console.log(`[cache] В кэше нет, скачиваю: ${url} (quality=${quality})`);
-  const download = (async () => {
+  const promise = (async () => {
     const start = Date.now();
     const file = await downloadToCache(url, quality, key);
-    const sizeMB = formatMB(statSync(file).size);
+    const st = await stat(file).catch(() => null);
+    if (!st) throw new Error("yt-dlp вернул файл, но не удалось прочитать его метаданные");
+    const sizeMB = formatMB(st.size);
     const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
     console.log(`[cache] Скачано и закэшировано (${sizeMB} MB за ${elapsedSec}s): ${path.basename(file)}`);
+    await pruneCache();
     return file;
   })();
-  cacheDownloads.set(key, download);
+
+  cacheDownloads.set(key, promise);
 
   try {
-    return await download;
+    return await promise;
   } finally {
-    if (cacheDownloads.get(key) === download) cacheDownloads.delete(key);
+    if (cacheDownloads.get(key) === promise) cacheDownloads.delete(key);
   }
 }
 
-export function clearAudioCache() {
-  const entries = readdirSync(CACHE_DIR);
-  for (const f of entries) unlinkSync(path.join(CACHE_DIR, f));
-  return entries.length;
+export async function clearAudioCache() {
+  const files = await readdir(CACHE_DIR).catch(() => []);
+  let removed = 0;
+  for (const file of files) {
+    const filePath = path.join(CACHE_DIR, file);
+    try {
+      await rm(filePath, { force: true });
+      removed += 1;
+    } catch {
+      // no-op
+    }
+  }
+  return removed;
 }
 
-export function getAudioCacheStats() {
-  const entries = readdirSync(CACHE_DIR).filter((f) => !f.endsWith(".part"));
-  const totalBytes = entries.reduce((sum, f) => sum + statSync(path.join(CACHE_DIR, f)).size, 0);
+export async function getAudioCacheStats() {
+  const entries = await inventory();
+  const totalBytes = entries.reduce((sum, entry) => sum + entry.size, 0);
   return { files: entries.length, totalMB: Number(formatMB(totalBytes)) };
 }
 
-export async function getAudioStream(url, quality = "best") {
+export async function getAudioStream(url, quality = "best", startTimeSec = 0) {
   let localFile;
   try {
     localFile = await ensureCachedFile(url, quality);
@@ -337,11 +426,11 @@ export async function getAudioStream(url, quality = "best") {
       reject(new Error(`ffmpeg истёк таймаут (${ffmpegTimeout}ms) — возможно, повреждённый файл кэша`));
     }, ffmpegTimeout);
 
-    // Reading from a local cached file now, so no -reconnect flags needed —
-    // that eliminates network-hiccup stutter during playback entirely.
+    const seekSeconds = Math.max(0, Number(startTimeSec) || 0);
     const child = spawn(
       ffmpegPath,
       [
+        ...(seekSeconds > 0 ? ["-ss", seekSeconds.toFixed(3)] : []),
         "-i", localFile,
         "-analyzeduration", "0",
         "-probesize", "32",
@@ -355,10 +444,6 @@ export async function getAudioStream(url, quality = "best") {
     );
 
     let stderrTail = "";
-
-    // Count decoded bytes through a Transform instead of a direct `data`
-    // listener. This preserves stream backpressure so ffmpeg cannot run far
-    // ahead of Discord playback and prematurely exhaust a long track.
     const stats = { bytesOut: 0 };
     const meteredStream = new Transform({
       transform(chunk, _encoding, callback) {
@@ -383,8 +468,6 @@ export async function getAudioStream(url, quality = "best") {
       reject(err);
     });
 
-    // `readable` confirms that ffmpeg produced audio without switching the
-    // stream to flowing mode or consuming the first chunk.
     meteredStream.once("readable", () => {
       if (settled) return;
       clearTimeout(timeout);
