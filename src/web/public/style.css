@@ -348,6 +348,131 @@ button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
 .playlist-dialog select { width: 100%; color: var(--md-on-surface); }
 .dialog-actions { justify-content: flex-end; margin-top: 2px; }
 
+.phone-connect { color: var(--md-on-primary-container); background: var(--md-primary-container); }
+.phone-dialog form { display: grid; gap: 14px; }
+.phone-qr {
+  width: min(300px, 100%);
+  margin: 0 auto;
+  padding: 12px;
+  border-radius: var(--r-md);
+  background: #fff;
+}
+.phone-qr svg { display: block; width: 100%; height: auto; }
+.phone-url { color: var(--md-primary); text-align: center; overflow-wrap: anywhere; font-size: 12px; }
+.phone-devices { display: grid; gap: 9px; padding-top: 4px; }
+.phone-devices-header, .phone-device { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.phone-devices-header > strong { font-size: 13px; }
+.phone-devices-header button { padding: 6px 10px; font-size: 11px; }
+.phone-devices-list { display: grid; gap: 7px; max-height: 210px; overflow-y: auto; }
+.phone-device { padding: 9px 10px; border: 1px solid var(--md-outline); border-radius: var(--r-sm); background: rgba(0, 0, 0, 0.16); }
+.phone-device > div { min-width: 0; display: grid; gap: 3px; }
+.phone-device strong { font-size: 12.5px; }
+.phone-device span { color: var(--md-on-surface-muted); font-size: 10.5px; line-height: 1.35; }
+.phone-device-revoke { flex: 0 0 auto; padding: 7px 9px; font-size: 11px; }
+.mobile-nav, .mobile-more-menu { display: none; }
+.queue-more { width: 100%; margin-top: 8px; }
+
+@media (max-width: 720px) {
+  body { background-attachment: scroll; padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+  body > header {
+    position: sticky;
+    align-items: stretch;
+    flex-direction: row;
+    gap: 8px;
+    padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+  }
+  body > header h1 { display: none; }
+  .statusbar { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+  #botTag, #uptime { display: none; }
+  .statusbar select { grid-column: 1; grid-row: 1; min-width: 0; width: 100%; }
+  .statusbar button { min-height: 38px; padding: 7px 10px; }
+  .phone-connect { grid-column: 2; grid-row: 1; white-space: nowrap; }
+  .panel-menu { display: none; }
+  main#board { position: static; height: auto !important; margin: 10px; display: block; }
+  .panel {
+    position: relative !important;
+    inset: auto !important;
+    width: 100%;
+    max-width: none;
+    border-radius: 18px;
+  }
+  .mobile-mode .panel { display: none !important; }
+  .mobile-mode .panel.mobile-active { display: block !important; }
+  .drag-handle, .panel-controls { display: none !important; }
+  .panel-header { position: static; padding: 12px; }
+  .panel-body { padding: 12px; }
+  .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 8px; }
+  .actions > input, .actions > select, .actions > label { grid-column: 1 / -1; min-width: 0 !important; width: 100%; }
+  .actions > button { min-width: 0 !important; width: 100%; min-height: 42px; padding-inline: 8px; }
+  .music-queue-header, .music-save-row, #musicQueue li { align-items: flex-start; }
+  #musicQueue { max-height: 42dvh; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px 0 22px; scrollbar-gutter: stable; }
+  .queue-track-actions button { width: 40px; height: 40px; }
+  .music-telemetry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .modlists, .statscols { flex-direction: column; gap: 14px; }
+  .datatable { display: block; overflow-x: auto; }
+  textarea#configEditor { height: 55vh; }
+  .playlist-dialog { max-height: calc(100dvh - 20px); overflow: auto; padding: 18px; }
+  .phone-actions { display: grid; grid-template-columns: 1fr; }
+  .phone-actions button { min-height: 44px; width: 100%; }
+
+  .mobile-nav {
+    display: grid;
+    position: fixed;
+    z-index: 1500;
+    left: 8px;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    grid-template-columns: repeat(5, 1fr);
+    gap: 3px;
+    padding: 6px;
+    border: 1px solid var(--md-outline-strong);
+    border-radius: 20px;
+    background: rgba(28, 29, 38, 0.94);
+    backdrop-filter: blur(24px) saturate(160%);
+    box-shadow: var(--shadow-panel);
+  }
+  .mobile-nav button {
+    display: grid;
+    place-items: center;
+    gap: 2px;
+    min-width: 0;
+    min-height: 52px;
+    padding: 5px 2px;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--md-on-surface-muted);
+    font-size: 10px;
+  }
+  .mobile-nav button span { font-size: 18px; line-height: 1; }
+  .mobile-nav button.active { color: var(--md-on-primary-container); background: var(--md-primary-container); }
+  .mobile-more-menu {
+    display: grid;
+    position: fixed;
+    z-index: 1600;
+    inset: 0;
+    align-items: end;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.62);
+  }
+  .mobile-more-menu[hidden] { display: none; }
+  .mobile-more-sheet {
+    display: grid;
+    gap: 5px;
+    max-height: min(72dvh, 560px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 14px;
+    border: 1px solid var(--md-outline-strong);
+    border-radius: 22px;
+    background: var(--md-surface-solid);
+    box-shadow: var(--shadow-panel);
+  }
+  .mobile-more-title { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 8px; }
+  .mobile-more-title button { width: 38px; height: 38px; padding: 0; }
+  .mobile-more-sheet > button:not(#mobileMoreClose) { min-height: 46px; text-align: left; }
+  .mobile-menu-open { overflow: hidden; }
+}
+
 .music-now { display: grid; gap: 12px; }
 .music-progress-area { display: grid; gap: 9px; }
 .music-progress-area[hidden] { display: none; }
@@ -411,3 +536,5 @@ button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
 #historyList .msg { border-bottom: 1px solid var(--md-outline); padding: 10px 0; }
 #historyList .msg .meta { color: var(--md-on-surface-muted); font-size: 12px; }
 #historyList .msg.deleted { opacity: 0.5; text-decoration: line-through; }
+.playlist-actions { display: flex; gap: 8px; margin: 10px 0; }
+.playlist-actions button { min-height: 38px; }

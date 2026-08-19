@@ -36,11 +36,14 @@ class GuildQueue {
     this.volume = 1;
     this.connection = null;
     this.textChannelId = null;
+    this.activePlaylist = null;
     this.idleTimer = null;
     this.currentProcess = null;
     this.currentResource = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
+    this.playbackOffsetSec = 0;
+    this.lastPositionSaveAt = 0;
     this.stabilitySamples = [];
     this.lastTelemetrySample = null;
     this.lastStabilityIssue = null;
@@ -130,6 +133,24 @@ class GuildQueue {
     return tracks.length;
   }
 
+  switchPlaylist(playlist, tracks) {
+    if (this.destroyed) throw new Error("Очередь уже завершена");
+    if (!Array.isArray(tracks) || tracks.length === 0) throw new Error("В плейлисте нет доступных треков");
+    if (tracks.length > MAX_QUEUE_SIZE) throw new Error(`Плейлист превышает максимум ${MAX_QUEUE_SIZE} треков`);
+    this.playGeneration += 1;
+    this.killCurrentProcess();
+    this.currentResource = null;
+    this.currentStreamStats = null;
+    this.playbackOffsetSec = 0;
+    this.player.stop(true);
+    this.playing = null;
+    this.tracks = tracks.map(queueTrack);
+    this.activePlaylist = { id: playlist.id, title: playlist.title };
+    this.clearIdleTimer();
+    void this.playNext();
+    saveQueueState(queues);
+  }
+
   removeTrack(queueId) {
     if (this.destroyed) return null;
     const index = this.tracks.findIndex((track) => track.queueId === queueId);
@@ -154,9 +175,17 @@ class GuildQueue {
 
   getPlaylistSnapshot() {
     if (this.destroyed) return [];
-    return [this.playing, ...this.tracks]
-      .filter(Boolean)
-      .map((track) => ({ ...track }));
+    const playing = this.getPersistedPlaying();
+    return [playing, ...this.tracks].filter(Boolean).map((track) => ({ ...track }));
+  }
+
+  currentElapsedSec() {
+    return Math.max(0, this.playbackOffsetSec + (this.currentResource?.playbackDuration ?? 0) / 1000);
+  }
+
+  getPersistedPlaying() {
+    if (!this.playing) return null;
+    return { ...this.playing, startTimeSec: this.currentElapsedSec() };
   }
 
   killCurrentProcess() {
@@ -223,6 +252,11 @@ class GuildQueue {
         decodedBytesPerSec: (bufferedDelta * 1000) / wallDeltaMs,
       };
 
+      if (now - this.lastPositionSaveAt >= 5000) {
+        this.lastPositionSaveAt = now;
+        scheduleQueueSave();
+      }
+
       console.log(
         `[music:${this.guildId}] буфер: ${(bufferedDelta / 1e6).toFixed(2)} MB/s | воспроизведено: ${(playedDelta / 1e6).toFixed(2)} MB/s`
       );
@@ -253,12 +287,13 @@ class GuildQueue {
 
     const playerStatus = this.player.state.status;
     const voiceStatus = this.connection?.state?.status ?? "disconnected";
-    const elapsedSec = Math.max(0, (this.currentResource?.playbackDuration ?? 0) / 1000);
+    const elapsedSec = this.currentElapsedSec();
     const durationSec = Math.max(0, Number(this.playing.durationSec) || 0);
     const remainingSec = durationSec ? Math.max(0, durationSec - elapsedSec) : null;
     const progressPercent = durationSec ? Math.min(100, (elapsedSec / durationSec) * 100) : 0;
     const decodedSec = (this.currentStreamStats?.bytesOut ?? 0) / PCM_BYTES_PER_SEC;
-    const bufferedSec = Math.max(0, decodedSec - elapsedSec);
+    const playedSinceSeekSec = Math.max(0, (this.currentResource?.playbackDuration ?? 0) / 1000);
+    const bufferedSec = Math.max(0, decodedSec - playedSinceSeekSec);
     const stableCount = this.stabilitySamples.filter(Boolean).length;
     const stabilityPercent = this.stabilitySamples.length
       ? Math.round((stableCount / this.stabilitySamples.length) * 100)
@@ -301,12 +336,19 @@ class GuildQueue {
     const next = this.tracks.shift();
     if (!next) {
       this.playing = null;
+      this.playbackOffsetSec = 0;
+      this.activePlaylist = null;
       this.scheduleIdleLeave();
+      scheduleQueueSave();
       return;
     }
     this.playing = next;
+    const durationSec = Math.max(0, Number(next.durationSec) || 0);
+    this.playbackOffsetSec = Math.max(0, Number(next.startTimeSec) || 0);
+    if (durationSec > 1) this.playbackOffsetSec = Math.min(this.playbackOffsetSec, durationSec - 1);
+    scheduleQueueSave();
     try {
-      const { stream, type, process: child, quality, stats } = await getAudioStream(next.url, next._quality ?? "best");
+      const { stream, type, process: child, quality, stats } = await getAudioStream(next.url, next._quality ?? "best", this.playbackOffsetSec);
       if (generation !== this.playGeneration) {
         stream.destroy();
         if (!child.killed) child.kill();
@@ -314,7 +356,7 @@ class GuildQueue {
       }
       this.currentProcess = child;
       this.currentQuality = quality;
-      console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}", quality=${quality}, type=${type}`);
+      console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}" с ${this.playbackOffsetSec.toFixed(1)}с, quality=${quality}, type=${type}`);
       const resource = createAudioResource(stream, {
         inputType: type,
         inlineVolume: true,
@@ -365,7 +407,9 @@ class GuildQueue {
 
   pause() {
     if (this.destroyed) return false;
-    return this.player.pause();
+    const paused = this.player.pause();
+    if (paused) saveQueueState(queues);
+    return paused;
   }
 
   resume() {
@@ -392,6 +436,8 @@ class GuildQueue {
     this.currentResource = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
+    this.playbackOffsetSec = 0;
+    this.activePlaylist = null;
     this.stabilitySamples = [];
     this.lastTelemetrySample = null;
     try {
@@ -456,6 +502,7 @@ export async function restoreQueueState(client) {
         .filter((track) => track?.url)
         .map(queueTrack);
       queue.tracks = restoredTracks;
+      queue.activePlaylist = data.activePlaylist?.id ? data.activePlaylist : null;
       restored += restoredTracks.length;
       queue.textChannelId = data.textChannelId ?? null;
       if (data.volume) {

@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:latest
+    image: discord-bot:1.8.0
     container_name: discord-bot
     build:
       context: .
@@ -15,6 +15,9 @@ services:
       CLIENT_ID: ${CLIENT_ID}
       GUILD_ID: ${GUILD_ID}
       WEB_PORT: ${WEB_PORT:-8787}
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+      NGROK_DOMAIN: ${NGROK_DOMAIN:-}
+      NGROK_DOMAIN_ID: ${NGROK_DOMAIN_ID:-}
       # Optional: internal URL of the bgutil PO Token Provider service.
       YTDLP_POT_PROVIDER_URL: ${YTDLP_POT_PROVIDER_URL:-}
       # Optional YouTube player client override (for example, web_embedded).
