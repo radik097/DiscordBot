@@ -13,6 +13,12 @@ RUN apt-get update && apt-get install -y \
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o yt-dlp && \
     chmod +x yt-dlp
 
+# PO Token Provider plugin for yt-dlp. The provider server itself runs as an
+# optional Docker Compose service; this ZIP only adds the client integration.
+ARG BGUTIL_VERSION=1.3.1
+RUN curl -fL "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/download/${BGUTIL_VERSION}/bgutil-ytdlp-pot-provider.zip" \
+    -o bgutil-ytdlp-pot-provider.zip
+
 # Production image
 FROM oven/bun:1-slim
 
@@ -20,6 +26,7 @@ WORKDIR /app
 
 # Установить зависимости
 RUN apt-get update && apt-get install -y \
+    curl \
     ffmpeg \
     libopus0 \
     libsodium23 \
@@ -29,6 +36,8 @@ RUN apt-get update && apt-get install -y \
 # Скопировать yt-dlp из downloader stage
 COPY --from=downloader /tmp/yt-dlp /app/bin/yt-dlp
 RUN chmod +x /app/bin/yt-dlp
+RUN mkdir -p /app/bin/yt-dlp-plugins
+COPY --from=downloader /tmp/bgutil-ytdlp-pot-provider.zip /app/bin/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip
 
 # Скопировать файлы проекта
 COPY package.json bun.lock ./

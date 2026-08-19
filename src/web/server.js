@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { extname } from "node:path";
 import { loadConfig, saveConfig, validateConfig, buildStructure, wipeStructure } from "../structureManager.js";
 import { getQueue, peekQueue } from "../music/queue.js";
-import { resolveTrack } from "../music/source.js";
+import { resolveInput } from "../music/source.js";
 import { getHistory, listHistoryChannels, getStats } from "../db.js";
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
@@ -81,7 +81,9 @@ async function handleMusic(req, parts, client) {
 
   if (req.method === "GET" && !action) {
     const queue = peekQueue(guildId);
-    return json(queue ? { playing: queue.playing, tracks: queue.tracks, volume: queue.volume } : { playing: null, tracks: [], volume: 1 });
+    return json(queue
+      ? { playing: queue.playing, tracks: queue.tracks, volume: queue.volume, playback: queue.getPlaybackStatus() }
+      : { playing: null, tracks: [], volume: 1, playback: null });
   }
   if (req.method !== "POST" || !action) return null;
 
@@ -92,18 +94,28 @@ async function handleMusic(req, parts, client) {
     const channel = guild.channels.cache.get(channelId);
     if (!channel?.isVoiceBased?.()) return json({ error: "Голосовой канал не найден" }, { status: 404 });
 
-    let track;
+    let resolved;
     try {
-      track = await resolveTrack(query, "веб-панель");
+      resolved = await resolveInput(query, "веб-панель");
     } catch (err) {
-      return json({ error: `Не удалось найти трек: ${err.message}` }, { status: 400 });
+      return json({ error: `Не удалось обработать запрос: ${err.message}` }, { status: 400 });
     }
-    if (!track) return json({ error: "Ничего не найдено" }, { status: 404 });
+    if (!resolved.tracks.length) return json({ error: "В плейлисте или поиске нет доступных треков" }, { status: 404 });
 
     const queue = getQueue(guildId);
     queue.connect(channel);
-    await queue.enqueue(track);
-    return json({ ok: true, track });
+    try {
+      await queue.enqueueMany(resolved.tracks);
+    } catch (err) {
+      return json({ error: err.message }, { status: 409 });
+    }
+    return json({
+      ok: true,
+      kind: resolved.kind,
+      title: resolved.title,
+      addedCount: resolved.tracks.length,
+      track: resolved.tracks[0],
+    });
   }
 
   const queue = peekQueue(guildId);

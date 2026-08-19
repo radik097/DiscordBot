@@ -30,6 +30,12 @@ class GuildQueue {
     this.textChannelId = null;
     this.idleTimer = null;
     this.currentProcess = null;
+    this.currentResource = null;
+    this.currentStreamStats = null;
+    this.currentQuality = null;
+    this.stabilitySamples = [];
+    this.lastTelemetrySample = null;
+    this.lastStabilityIssue = null;
 
     this.player = createAudioPlayer();
     this.player.on("stateChange", (oldState, newState) => {
@@ -88,12 +94,19 @@ class GuildQueue {
   }
 
   async enqueue(track) {
-    if (this.tracks.length >= MAX_QUEUE_SIZE) {
-      throw new Error(`Очередь переполнена (максимум ${MAX_QUEUE_SIZE} треков)`);
+    return this.enqueueMany([track]);
+  }
+
+  async enqueueMany(tracks) {
+    if (!Array.isArray(tracks) || tracks.length === 0) return 0;
+    if (this.tracks.length + tracks.length > MAX_QUEUE_SIZE) {
+      const available = Math.max(0, MAX_QUEUE_SIZE - this.tracks.length);
+      throw new Error(`В очереди недостаточно места: доступно ${available}, требуется ${tracks.length} (максимум ${MAX_QUEUE_SIZE})`);
     }
-    this.tracks.push(track);
+    this.tracks.push(...tracks);
     this.clearIdleTimer();
     if (!this.playing) await this.playNext();
+    return tracks.length;
   }
 
   killCurrentProcess() {
@@ -112,16 +125,53 @@ class GuildQueue {
     this.stopStatsLogging();
     let lastBytesOut = 0;
     let lastPlaybackMs = 0;
+    let lastSampleAt = Date.now();
+    this.currentStreamStats = streamStats;
+    this.stabilitySamples = [];
+    this.lastTelemetrySample = null;
+    this.lastStabilityIssue = null;
     this.statsInterval = setInterval(() => {
       const resource = this.currentResource;
       if (!resource) return;
 
+      const now = Date.now();
+      const wallDeltaMs = Math.max(1, now - lastSampleAt);
+      lastSampleAt = now;
       const bufferedDelta = streamStats.bytesOut - lastBytesOut;
       lastBytesOut = streamStats.bytesOut;
 
       const playbackMs = resource.playbackDuration;
-      const playedDelta = ((playbackMs - lastPlaybackMs) / 1000) * PCM_BYTES_PER_SEC;
+      const playbackDeltaMs = Math.max(0, playbackMs - lastPlaybackMs);
+      const playedDelta = (playbackDeltaMs / 1000) * PCM_BYTES_PER_SEC;
       lastPlaybackMs = playbackMs;
+
+      const playerStatus = this.player.state.status;
+      const voiceStatus = this.connection?.state?.status ?? "disconnected";
+      let healthy = null;
+      let reason = null;
+
+      if (playerStatus === AudioPlayerStatus.Playing) {
+        healthy = voiceStatus === VoiceConnectionStatus.Ready
+          && playbackDeltaMs >= Math.min(500, wallDeltaMs * 0.5);
+        if (voiceStatus !== VoiceConnectionStatus.Ready) reason = "voice-not-ready";
+        else if (!healthy) reason = "playback-stalled";
+      } else if (playerStatus === AudioPlayerStatus.Buffering || playerStatus === AudioPlayerStatus.AutoPaused) {
+        healthy = false;
+        reason = "buffering";
+      }
+
+      if (healthy !== null) {
+        this.stabilitySamples.push(healthy);
+        if (this.stabilitySamples.length > 30) this.stabilitySamples.shift();
+      }
+      if (reason) this.lastStabilityIssue = { reason, at: now };
+      this.lastTelemetrySample = {
+        at: now,
+        healthy,
+        reason,
+        playbackRate: playbackDeltaMs / wallDeltaMs,
+        decodedBytesPerSec: (bufferedDelta * 1000) / wallDeltaMs,
+      };
 
       console.log(
         `[music:${this.guildId}] буфер: ${(bufferedDelta / 1e6).toFixed(2)} MB/s | воспроизведено: ${(playedDelta / 1e6).toFixed(2)} MB/s`
@@ -134,8 +184,69 @@ class GuildQueue {
     this.statsInterval = null;
   }
 
+  getPlaybackStatus() {
+    if (!this.playing) {
+      return {
+        state: "idle",
+        playerStatus: this.player.state.status,
+        voiceStatus: this.connection?.state?.status ?? "disconnected",
+        elapsedSec: 0,
+        remainingSec: 0,
+        durationSec: 0,
+        progressPercent: 0,
+        bufferedSec: 0,
+        stabilityPercent: null,
+        sampleCount: 0,
+        serverTime: Date.now(),
+      };
+    }
+
+    const playerStatus = this.player.state.status;
+    const voiceStatus = this.connection?.state?.status ?? "disconnected";
+    const elapsedSec = Math.max(0, (this.currentResource?.playbackDuration ?? 0) / 1000);
+    const durationSec = Math.max(0, Number(this.playing.durationSec) || 0);
+    const remainingSec = durationSec ? Math.max(0, durationSec - elapsedSec) : null;
+    const progressPercent = durationSec ? Math.min(100, (elapsedSec / durationSec) * 100) : 0;
+    const decodedSec = (this.currentStreamStats?.bytesOut ?? 0) / PCM_BYTES_PER_SEC;
+    const bufferedSec = Math.max(0, decodedSec - elapsedSec);
+    const stableCount = this.stabilitySamples.filter(Boolean).length;
+    const stabilityPercent = this.stabilitySamples.length
+      ? Math.round((stableCount / this.stabilitySamples.length) * 100)
+      : null;
+
+    let state = "loading";
+    if (playerStatus === AudioPlayerStatus.Playing && voiceStatus === VoiceConnectionStatus.Ready) {
+      state = this.lastTelemetrySample?.healthy === false ? "warning" : "stable";
+    } else if (playerStatus === AudioPlayerStatus.Paused) state = "paused";
+    else if (playerStatus === AudioPlayerStatus.Buffering || playerStatus === AudioPlayerStatus.AutoPaused) state = "buffering";
+    else if (voiceStatus !== VoiceConnectionStatus.Ready) state = "connecting";
+
+    return {
+      state,
+      playerStatus,
+      voiceStatus,
+      elapsedSec,
+      remainingSec,
+      durationSec,
+      progressPercent,
+      bufferedSec,
+      stabilityPercent,
+      sampleCount: this.stabilitySamples.length,
+      playbackRate: this.lastTelemetrySample?.playbackRate ?? null,
+      decodedKbps: this.lastTelemetrySample
+        ? Math.round(this.lastTelemetrySample.decodedBytesPerSec / 1024)
+        : null,
+      quality: this.currentQuality,
+      lastIssue: this.lastStabilityIssue,
+      serverTime: Date.now(),
+    };
+  }
+
   async playNext() {
     this.killCurrentProcess();
+    this.currentResource = null;
+    this.currentStreamStats = null;
+    this.currentQuality = null;
     const next = this.tracks.shift();
     if (!next) {
       this.playing = null;
@@ -146,6 +257,7 @@ class GuildQueue {
     try {
       const { stream, type, process: child, quality, stats } = await getAudioStream(next.url, next._quality ?? "best");
       this.currentProcess = child;
+      this.currentQuality = quality;
       console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}", quality=${quality}, type=${type}`);
       const resource = createAudioResource(stream, { inputType: type, inlineVolume: true });
       resource.volume?.setVolume(this.volume);
@@ -204,6 +316,11 @@ class GuildQueue {
     this.killCurrentProcess();
     this.tracks = [];
     this.playing = null;
+    this.currentResource = null;
+    this.currentStreamStats = null;
+    this.currentQuality = null;
+    this.stabilitySamples = [];
+    this.lastTelemetrySample = null;
     try {
       this.player.stop(true);
     } catch {}

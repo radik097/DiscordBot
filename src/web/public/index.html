@@ -77,11 +77,28 @@
     <div class="panel-body">
       <div class="actions">
         <select id="musicChannel"></select>
-        <input id="musicQuery" placeholder="Ссылка на YouTube или поисковый запрос" style="flex:1; min-width:240px;" />
+        <input id="musicQuery" placeholder="Трек, запрос или YouTube-плейлист" style="flex:1; min-width:240px;" />
         <button id="musicPlay" class="primary">▶️ Включить</button>
       </div>
       <div id="musicError" class="errors"></div>
-      <div id="nowPlaying" class="card"></div>
+      <div id="nowPlaying" class="card music-now">
+        <div id="nowPlayingTitle">Сейчас ничего не играет.</div>
+        <div id="musicProgressArea" class="music-progress-area" hidden>
+          <div class="music-time-row">
+            <span id="musicElapsed">0:00</span>
+            <span id="musicRemaining">−0:00</span>
+          </div>
+          <div class="music-progress-track" role="progressbar" aria-label="Прогресс трека">
+            <div id="musicProgressBar" class="music-progress-bar"></div>
+          </div>
+          <div class="music-telemetry-grid">
+            <div><span class="metric-label">Стабильность</span><strong id="musicStability">—</strong></div>
+            <div><span class="metric-label">Буфер</span><strong id="musicBuffer">—</strong></div>
+            <div><span class="metric-label">Плеер</span><strong id="musicPlayerState">—</strong></div>
+            <div><span class="metric-label">Голос</span><strong id="musicVoiceState">—</strong></div>
+          </div>
+        </div>
+      </div>
       <div class="actions">
         <button id="musicPause">⏸️ Пауза</button>
         <button id="musicResume">▶️ Продолжить</button>

@@ -9,7 +9,7 @@ import { saveAllQueues, restoreQueueState } from "./music/queue.js";
 
 process.env.FFMPEG_PATH ??= ffmpegPath;
 
-const NEWCOMER_ROLE = "Новичёк";
+const NEWCOMER_ROLE = "Новичок";
 const MEMBER_ROLE = "Участник";
 
 const { DISCORD_TOKEN, WEB_PORT } = process.env;

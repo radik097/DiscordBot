@@ -12,7 +12,12 @@ async function api(path, opts) {
 
 function fmtDuration(sec) {
   sec = Math.floor(sec || 0);
-  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function fmtTime(ts) {
@@ -45,6 +50,7 @@ async function loadStatus() {
 
 document.getElementById("guildSelect").addEventListener("change", async (e) => {
   state.guildId = e.target.value;
+  lastQueueSignature = "";
   await Promise.all([loadStatus(), loadMusic(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()]);
 });
 
@@ -128,10 +134,12 @@ document.getElementById("musicPlay").addEventListener("click", async () => {
   const query = document.getElementById("musicQuery").value.trim();
   if (!channelId) return (errEl.textContent = "На сервере нет голосовых каналов.");
   if (!query) return (errEl.textContent = "Вставь ссылку на YouTube или запрос.");
-  errEl.textContent = "Ищу трек...";
+  errEl.textContent = "Обрабатываю трек или плейлист...";
   try {
-    const { track } = await api(`/api/music/${state.guildId}/play`, { method: "POST", body: JSON.stringify({ query, channelId }) });
-    errEl.textContent = `✅ ${track.title}`;
+    const result = await api(`/api/music/${state.guildId}/play`, { method: "POST", body: JSON.stringify({ query, channelId }) });
+    errEl.textContent = result.kind === "playlist"
+      ? `✅ Плейлист «${result.title}»: добавлено ${result.addedCount} треков`
+      : `✅ ${result.track.title}`;
     document.getElementById("musicQuery").value = "";
   } catch (err) {
     errEl.textContent = "Ошибка: " + err.message;
@@ -139,25 +147,101 @@ document.getElementById("musicPlay").addEventListener("click", async () => {
   loadMusic();
 });
 
+const PLAYBACK_STATE_LABELS = {
+  stable: "● Стабильно",
+  warning: "● Нестабильно",
+  buffering: "● Буферизация",
+  connecting: "● Подключение",
+  loading: "● Загрузка",
+  paused: "● Пауза",
+  idle: "● Ожидание",
+};
+const PLAYER_STATE_LABELS = {
+  playing: "Играет",
+  paused: "Пауза",
+  buffering: "Буферизация",
+  autopaused: "Автопауза",
+  idle: "Ожидание",
+};
+const VOICE_STATE_LABELS = {
+  ready: "Готово",
+  connecting: "Подключение",
+  signalling: "Согласование",
+  disconnected: "Отключено",
+  destroyed: "Завершено",
+};
+
+let musicLoadInFlight = false;
+let lastQueueSignature = "";
+
 async function loadMusic() {
   if (!state.guildId) return;
-  const data = await api(`/api/music/${state.guildId}`);
-  const now = document.getElementById("nowPlaying");
-  now.innerHTML = data.playing
-    ? `▶️ <b>${data.playing.title}</b> (${fmtDuration(data.playing.durationSec)}) — запросил(а) ${data.playing.requestedBy}`
-    : "Сейчас ничего не играет.";
+  if (musicLoadInFlight) return;
+  musicLoadInFlight = true;
+  try {
+    const requestedGuildId = state.guildId;
+    const data = await api(`/api/music/${requestedGuildId}`);
+    if (requestedGuildId !== state.guildId) return;
+    const title = document.getElementById("nowPlayingTitle");
+    const progressArea = document.getElementById("musicProgressArea");
 
-  const list = document.getElementById("musicQueue");
-  list.innerHTML = "";
-  for (const t of data.tracks) {
-    const li = document.createElement("li");
-    li.textContent = `${t.title} (${fmtDuration(t.durationSec)}) — ${t.requestedBy}`;
-    list.appendChild(li);
+    if (data.playing) {
+      title.textContent = `▶️ ${data.playing.title} (${fmtDuration(data.playing.durationSec)}) — запросил(а) ${data.playing.requestedBy}`;
+      progressArea.hidden = false;
+
+      const playback = data.playback ?? {};
+      const elapsed = Number(playback.elapsedSec) || 0;
+      const duration = Number(playback.durationSec) || Number(data.playing.durationSec) || 0;
+      const remaining = playback.remainingSec == null ? null : Math.max(0, Number(playback.remainingSec) || 0);
+      const percent = Math.max(0, Math.min(100, Number(playback.progressPercent) || 0));
+
+      document.getElementById("musicElapsed").textContent = `${fmtDuration(elapsed)} / ${duration ? fmtDuration(duration) : "—"}`;
+      document.getElementById("musicRemaining").textContent = remaining == null ? "осталось —" : `осталось ${fmtDuration(remaining)}`;
+      const progressBar = document.getElementById("musicProgressBar");
+      progressBar.style.width = `${percent}%`;
+      const progressTrack = progressBar.parentElement;
+      progressTrack.setAttribute("aria-valuenow", percent.toFixed(1));
+      progressTrack.setAttribute("aria-valuemin", "0");
+      progressTrack.setAttribute("aria-valuemax", "100");
+
+      const stability = document.getElementById("musicStability");
+      const stabilitySuffix = playback.stabilityPercent == null
+        ? " · сбор данных"
+        : ` · ${playback.stabilityPercent}% (${playback.sampleCount || 0}с)`;
+      stability.textContent = `${PLAYBACK_STATE_LABELS[playback.state] ?? playback.state ?? "—"}${stabilitySuffix}`;
+      stability.className = `stability-${playback.state || "loading"}`;
+
+      const buffer = Number(playback.bufferedSec) || 0;
+      const speed = playback.decodedKbps == null ? "" : ` · ${playback.decodedKbps} КиБ/с`;
+      document.getElementById("musicBuffer").textContent = `${buffer.toFixed(1)} с${speed}`;
+      document.getElementById("musicPlayerState").textContent = PLAYER_STATE_LABELS[playback.playerStatus] ?? playback.playerStatus ?? "—";
+      document.getElementById("musicVoiceState").textContent = VOICE_STATE_LABELS[playback.voiceStatus] ?? playback.voiceStatus ?? "—";
+    } else {
+      title.textContent = "Сейчас ничего не играет.";
+      progressArea.hidden = true;
+      document.getElementById("musicProgressBar").style.width = "0%";
+    }
+
+    const queueSignature = `${data.tracks.length}|${data.tracks[0]?.url ?? ""}|${data.tracks.at(-1)?.url ?? ""}`;
+    if (queueSignature !== lastQueueSignature) {
+      lastQueueSignature = queueSignature;
+      const list = document.getElementById("musicQueue");
+      list.innerHTML = "";
+      for (const t of data.tracks) {
+        const li = document.createElement("li");
+        li.textContent = `${t.title} (${fmtDuration(t.durationSec)}) — ${t.requestedBy}`;
+        list.appendChild(li);
+      }
+    }
+
+    const vol = document.getElementById("musicVolume");
+    if (document.activeElement !== vol) vol.value = Math.round((data.volume ?? 1) * 100);
+    document.getElementById("musicVolumeLabel").textContent = `${vol.value}%`;
+  } catch (err) {
+    document.getElementById("musicError").textContent = "Ошибка обновления: " + err.message;
+  } finally {
+    musicLoadInFlight = false;
   }
-
-  const vol = document.getElementById("musicVolume");
-  vol.value = Math.round((data.volume ?? 1) * 100);
-  document.getElementById("musicVolumeLabel").textContent = `${vol.value}%`;
 }
 
 async function musicAction(action, body) {
@@ -178,7 +262,7 @@ document.getElementById("musicVolume").addEventListener("change", (e) => {
   musicAction("volume", { level: Number(e.target.value) });
 });
 
-setInterval(() => loadMusic(), 3000);
+setInterval(() => loadMusic(), 1000);
 
 // --- Voice ------------------------------------------------------------
 

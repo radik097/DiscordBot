@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from "discord.js";
 import { loadConfig } from "../structureManager.js";
-import { resolveTrack } from "../music/source.js";
+import { resolveInput } from "../music/source.js";
 import { getQueue, peekQueue } from "../music/queue.js";
 
 function formatDuration(totalSec) {
@@ -31,8 +31,8 @@ async function checkAccess(interaction) {
 const play = {
   data: new SlashCommandBuilder()
     .setName("play")
-    .setDescription("Включить трек с YouTube или добавить в очередь")
-    .addStringOption((o) => o.setName("query").setDescription("Ссылка на YouTube или поисковый запрос").setRequired(true)),
+    .setDescription("Включить трек или добавить YouTube-плейлист в очередь")
+    .addStringOption((o) => o.setName("query").setDescription("Трек, запрос, ссылка или ID плейлиста").setRequired(true)),
   async execute(interaction) {
     if (!(await checkAccess(interaction))) return;
     const voiceChannel = interaction.member.voice?.channel;
@@ -43,23 +43,34 @@ const play = {
     await interaction.deferReply();
     const query = interaction.options.getString("query", true);
 
-    let track;
+    let resolved;
     try {
-      track = await resolveTrack(query, interaction.user.tag);
+      resolved = await resolveInput(query, interaction.user.tag);
     } catch (err) {
-      return interaction.editReply(`Не удалось найти трек: ${err.message}`);
+      return interaction.editReply(`Не удалось обработать запрос: ${err.message}`);
     }
-    if (!track) return interaction.editReply("Ничего не найдено.");
+    if (!resolved.tracks.length) return interaction.editReply("В плейлисте или поиске нет доступных треков.");
 
     const queue = getQueue(interaction.guildId);
     queue.textChannelId = interaction.channelId;
     queue.connect(voiceChannel);
     const wasIdle = !queue.playing;
-    await queue.enqueue(track);
+    try {
+      await queue.enqueueMany(resolved.tracks);
+    } catch (err) {
+      return interaction.editReply(`Не удалось добавить в очередь: ${err.message}`);
+    }
 
-    await interaction.editReply(
-      `${wasIdle ? "▶️ Играю" : "➕ Добавлено в очередь"}: **${track.title}** (${formatDuration(track.durationSec)})`
-    );
+    if (resolved.kind === "playlist") {
+      const limited = resolved.limited ? " (первые 500)" : "";
+      await interaction.editReply(
+        `📃 Плейлист **${resolved.title}**: добавлено ${resolved.tracks.length} треков${limited}. ${wasIdle ? "Воспроизведение началось." : "Треки поставлены в очередь."}`
+      );
+      return;
+    }
+
+    const [track] = resolved.tracks;
+    await interaction.editReply(`${wasIdle ? "▶️ Играю" : "➕ Добавлено в очередь"}: **${track.title}** (${formatDuration(track.durationSec)})`);
   },
 };
 
