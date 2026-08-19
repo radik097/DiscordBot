@@ -1,7 +1,9 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { ChannelType, PermissionsBitField } from "discord.js";
 
 const CONFIG_PATH = new URL("../config/structure.json", import.meta.url);
+const activeStructureOperations = new Set();
 
 export function loadConfig() {
   const raw = readFileSync(CONFIG_PATH, "utf-8");
@@ -9,7 +11,10 @@ export function loadConfig() {
 }
 
 export function saveConfig(config) {
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  const configPath = fileURLToPath(CONFIG_PATH);
+  const temporary = `${configPath}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  renameSync(temporary, configPath);
 }
 
 // Offline structural check (no Discord API calls): every role/category/permission
@@ -17,50 +22,97 @@ export function saveConfig(config) {
 // (`bun run validate-config`) and the web panel's config editor.
 export function validateConfig(config) {
   const errors = [];
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return ["Config must be a JSON object"];
+  }
+  const arrays = {};
+  for (const key of ["roles", "categories", "channels", "isolationRoles", "musicAllowedRoles", "protectedChannels"]) {
+    if (config[key] != null && !Array.isArray(config[key])) errors.push(`${key} must be an array`);
+    arrays[key] = Array.isArray(config[key]) ? config[key] : [];
+  }
   const flagNames = new Set(Object.keys(PermissionsBitField.Flags));
-  const roleNames = new Set((config.roles ?? []).map((r) => r.name));
+  const roleNames = new Set(arrays.roles.map((r) => r?.name).filter(Boolean));
   roleNames.add("@everyone");
-  const catNames = new Set((config.categories ?? []).map((c) => c.name));
-  const chanNames = new Set((config.channels ?? []).map((c) => c.name));
+  const catNames = new Set(arrays.categories.map((c) => c?.name).filter(Boolean));
+  const chanNames = new Set(arrays.channels.map((c) => c?.name).filter(Boolean));
+  const objectMap = (key) => {
+    const value = config[key];
+    if (value == null) return {};
+    if (typeof value !== "object" || Array.isArray(value)) {
+      errors.push(`${key} must be an object`);
+      return {};
+    }
+    return value;
+  };
+  const globalDenyRoles = objectMap("globalDenyRoles");
+  const alwaysAllRoles = objectMap("alwaysAllRoles");
+
+  const checkDuplicates = (items, type) => {
+    const seen = new Set();
+    for (const item of items ?? []) {
+      if (!item?.name) {
+        errors.push(`${type} contains an item without a name`);
+        continue;
+      }
+      if (seen.has(item.name)) errors.push(`Duplicate ${type} name: ${item.name}`);
+      seen.add(item.name);
+    }
+  };
+  checkDuplicates(arrays.roles, "role");
+  checkDuplicates(arrays.categories, "category");
+  checkDuplicates(arrays.channels, "channel");
 
   const checkPerms = (list, ctx) => {
-    for (const p of list ?? []) if (!flagNames.has(p)) errors.push(`Unknown permission '${p}' in ${ctx}`);
+    if (list == null) return;
+    if (!Array.isArray(list)) {
+      errors.push(`Permissions must be an array in ${ctx}`);
+      return;
+    }
+    for (const p of list) if (!flagNames.has(p)) errors.push(`Unknown permission '${p}' in ${ctx}`);
   };
   const checkRoleSpec = (spec, ctx) => {
     for (const [role, entry] of Object.entries(spec ?? {})) {
       if (!roleNames.has(role)) errors.push(`Unknown role '${role}' in ${ctx}`);
       if (Array.isArray(entry)) checkPerms(entry, ctx + "/" + role);
-      else {
+      else if (entry && typeof entry === "object") {
         checkPerms(entry.allow, ctx + "/" + role + "/allow");
         checkPerms(entry.deny, ctx + "/" + role + "/deny");
+      } else {
+        errors.push(`Invalid role permissions in ${ctx}/${role}`);
       }
     }
   };
 
-  for (const r of config.roles ?? []) checkPerms(r.permissions, "role:" + r.name);
-  for (const [role, perms] of Object.entries(config.globalDenyRoles ?? {})) {
+  for (const r of arrays.roles) checkPerms(r?.permissions, "role:" + r?.name);
+  for (const [role, perms] of Object.entries(globalDenyRoles)) {
     if (!roleNames.has(role)) errors.push("Unknown role in globalDenyRoles: " + role);
     checkPerms(perms, "globalDenyRoles/" + role);
   }
-  for (const [role, perms] of Object.entries(config.alwaysAllRoles ?? {})) {
+  for (const [role, perms] of Object.entries(alwaysAllRoles)) {
     if (!roleNames.has(role)) errors.push("Unknown role in alwaysAllRoles: " + role);
     checkPerms(perms, "alwaysAllRoles/" + role);
   }
-  for (const rule of config.isolationRoles ?? []) {
+  for (const rule of arrays.isolationRoles) {
+    if (!rule || typeof rule !== "object") {
+      errors.push("isolationRoles contains an invalid item");
+      continue;
+    }
     if (!roleNames.has(rule.role)) errors.push("Unknown role in isolationRoles: " + rule.role);
     checkPerms(rule.permissions, "isolationRoles/" + rule.role);
   }
-  for (const role of config.musicAllowedRoles ?? []) {
+  for (const role of arrays.musicAllowedRoles) {
     if (!roleNames.has(role)) errors.push("Unknown role in musicAllowedRoles: " + role);
   }
 
-  for (const c of config.categories ?? []) checkRoleSpec(c.roles, "category:" + c.name);
-  for (const ch of config.channels ?? []) {
-    checkRoleSpec(ch.roles, "channel:" + ch.name);
-    if (ch.category && !catNames.has(ch.category)) errors.push(`Channel '${ch.name}' references unknown category '${ch.category}'`);
+  for (const c of arrays.categories) checkRoleSpec(c?.roles, "category:" + c?.name);
+  for (const ch of arrays.channels) {
+    checkRoleSpec(ch?.roles, "channel:" + ch?.name);
+    if (ch?.category && !catNames.has(ch.category)) errors.push(`Channel '${ch.name}' references unknown category '${ch.category}'`);
   }
-  for (const rule of config.isolationRoles ?? [])
+  for (const rule of arrays.isolationRoles) {
+    if (!rule || typeof rule !== "object") continue;
     for (const name of rule.onlyChannels ?? []) if (!chanNames.has(name)) errors.push("isolationRoles onlyChannels references unknown channel: " + name);
+  }
 
   return errors;
 }
@@ -189,7 +241,7 @@ function isTopicError(err) {
   return err?.code === 50035 && "topic" in (err?.rawError?.errors ?? {});
 }
 
-export async function buildStructure(guild, config, { botMemberId } = {}) {
+async function buildStructureUnlocked(guild, config, { botMemberId } = {}) {
   const log = [];
 
   // 1. Roles — create missing ones, and sync base permissions/color/hoist/mentionable
@@ -314,7 +366,7 @@ export async function buildStructure(guild, config, { botMemberId } = {}) {
   return log;
 }
 
-export async function wipeStructure(guild, config = {}) {
+async function wipeStructureUnlocked(guild, config = {}) {
   const log = [];
   const me = guild.members.me;
   const protectedNames = new Set(config.protectedChannels ?? []);
@@ -350,6 +402,34 @@ export async function wipeStructure(guild, config = {}) {
   }
 
   return log;
+}
+
+async function withStructureLock(guild, operation) {
+  if (activeStructureOperations.has(guild.id)) {
+    throw new Error("Для этого сервера уже выполняется операция со структурой. Дождитесь её завершения.");
+  }
+  activeStructureOperations.add(guild.id);
+  try {
+    return await operation();
+  } finally {
+    activeStructureOperations.delete(guild.id);
+  }
+}
+
+export function buildStructure(guild, config, options = {}) {
+  return withStructureLock(guild, () => buildStructureUnlocked(guild, config, options));
+}
+
+export function wipeStructure(guild, config = {}) {
+  return withStructureLock(guild, () => wipeStructureUnlocked(guild, config));
+}
+
+export function rebuildStructure(guild, config, options = {}) {
+  return withStructureLock(guild, async () => {
+    const wipeLog = await wipeStructureUnlocked(guild, config);
+    const buildLog = await buildStructureUnlocked(guild, config, options);
+    return [...wipeLog, "---", ...buildLog];
+  });
 }
 
 // Reverse direction: read the guild's current roles/categories/channels and

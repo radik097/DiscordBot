@@ -4,10 +4,17 @@ import { extname } from "node:path";
 import { loadConfig, saveConfig, validateConfig, buildStructure, wipeStructure } from "../structureManager.js";
 import { getQueue, peekQueue } from "../music/queue.js";
 import { resolveInput } from "../music/source.js";
+import {
+  getPlaylistSaveStatus,
+  getSavedPlaylist,
+  listSavedPlaylists,
+  startPlaylistSave,
+} from "../music/library.js";
 import { getHistory, listHistoryChannels, getStats } from "../db.js";
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const PUBLIC_ROOT = PUBLIC_DIR.pathname.replace(/^\/([A-Za-z]:)/, "$1");
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -25,6 +32,29 @@ function json(data, init = {}) {
 
 function notFound() {
   return new Response("Not found", { status: 404 });
+}
+
+async function readJson(req) {
+  const declaredLength = Number(req.headers.get("content-length")) || 0;
+  if (declaredLength > MAX_JSON_BODY_BYTES) {
+    const err = new Error("Тело запроса превышает 1 МБ");
+    err.status = 413;
+    throw err;
+  }
+  const text = await req.text();
+  if (Buffer.byteLength(text, "utf8") > MAX_JSON_BODY_BYTES) {
+    const err = new Error("Тело запроса превышает 1 МБ");
+    err.status = 413;
+    throw err;
+  }
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    const err = new Error("Некорректный JSON в запросе");
+    err.status = 400;
+    throw err;
+  }
 }
 
 async function serveStatic(pathname) {
@@ -45,14 +75,14 @@ async function handleConfig(req, parts) {
   const method = req.method;
   if (parts.length === 2 && method === "GET") return json(loadConfig());
   if (parts.length === 2 && method === "PUT") {
-    const body = await req.json();
+    const body = await readJson(req);
     const errors = validateConfig(body);
     if (errors.length) return json({ errors }, { status: 400 });
     saveConfig(body);
     return json({ ok: true });
   }
   if (parts[2] === "validate" && method === "POST") {
-    const body = await req.json();
+    const body = await readJson(req);
     return json({ errors: validateConfig(body) });
   }
   return null;
@@ -61,7 +91,7 @@ async function handleConfig(req, parts) {
 async function handleConfigAction(req, parts, client) {
   const action = parts[2]; // build | wipe
   if (!["build", "wipe"].includes(action) || req.method !== "POST") return null;
-  const body = await req.json();
+  const body = await readJson(req);
   const guild = client.guilds.cache.get(body.guildId);
   if (!guild) return json({ error: "Guild not found" }, { status: 404 });
   const config = loadConfig();
@@ -81,14 +111,28 @@ async function handleMusic(req, parts, client) {
 
   if (req.method === "GET" && !action) {
     const queue = peekQueue(guildId);
+    const playlistSave = getPlaylistSaveStatus(guildId);
     return json(queue
-      ? { playing: queue.playing, tracks: queue.tracks, volume: queue.volume, playback: queue.getPlaybackStatus() }
-      : { playing: null, tracks: [], volume: 1, playback: null });
+      ? { playing: queue.playing, tracks: queue.tracks, volume: queue.volume, playback: queue.getPlaybackStatus(), playlistSave }
+      : { playing: null, tracks: [], volume: 1, playback: null, playlistSave });
+  }
+  if (req.method === "GET" && action === "playlists") {
+    const manifestId = parts[4];
+    if (!manifestId) return json({ playlists: listSavedPlaylists(guildId) });
+    let playlist;
+    try {
+      playlist = getSavedPlaylist(guildId, manifestId);
+    } catch (err) {
+      return json({ error: err.message }, { status: 400 });
+    }
+    return playlist
+      ? json({ playlist })
+      : json({ error: "Сохранённый плейлист не найден" }, { status: 404 });
   }
   if (req.method !== "POST" || !action) return null;
 
   if (action === "play") {
-    const { query, channelId } = await req.json();
+    const { query, channelId } = await readJson(req);
     const guild = client.guilds.cache.get(guildId);
     if (!guild) return json({ error: "Guild not found" }, { status: 404 });
     const channel = guild.channels.cache.get(channelId);
@@ -125,8 +169,28 @@ async function handleMusic(req, parts, client) {
   else if (action === "stop") queue.destroy();
   else if (action === "pause") queue.pause();
   else if (action === "resume") queue.resume();
+  else if (action === "track") {
+    const { queueId, operation } = await readJson(req);
+    if (!queueId || !["play", "remove"].includes(operation)) {
+      return json({ error: "Нужны queueId и operation=play|remove" }, { status: 400 });
+    }
+    const track = operation === "play"
+      ? queue.playTrackNow(queueId)
+      : queue.removeTrack(queueId);
+    if (!track) return json({ error: "Трек уже исчез из очереди — обновите список" }, { status: 404 });
+    return json({ ok: true, track });
+  } else if (action === "save-playlist") {
+    const body = await readJson(req);
+    const tracks = queue.getPlaylistSnapshot();
+    try {
+      const job = startPlaylistSave(guildId, tracks, body.title);
+      return json({ ok: true, job }, { status: job.alreadyRunning ? 200 : 202 });
+    } catch (err) {
+      return json({ error: err.message }, { status: 400 });
+    }
+  }
   else if (action === "volume") {
-    const { level } = await req.json();
+    const { level } = await readJson(req);
     queue.setVolume(Math.max(0, Math.min(2, Number(level) / 100)));
   } else return null;
   return json({ ok: true });
@@ -152,7 +216,7 @@ async function handleModeration(req, parts, client) {
     const roleName = kind.endsWith("mute") ? "Muted" : "Заключеный";
     const role = guild.roles.cache.find((r) => r.name === roleName);
     if (!role) return json({ error: `Роль "${roleName}" не найдена` }, { status: 404 });
-    const { userId, reason } = await req.json();
+    const { userId, reason } = await readJson(req);
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member) return json({ error: "Участник не найден (проверь ID)" }, { status: 404 });
     try {
@@ -210,7 +274,7 @@ async function handleVoice(req, parts, client) {
     }
 
     if (action === "ban") {
-      const { reason } = await req.json().catch(() => ({}));
+      const { reason } = await readJson(req);
       try {
         await member.ban({ reason: reason || "Через веб-панель" });
       } catch (err) {
@@ -275,7 +339,7 @@ async function handleApi(req, url, client) {
 
   let res = null;
   if (resource === "status" && req.method === "GET") {
-    res = json({ tag: client.user?.tag ?? null, uptimeSec: Math.floor(process.uptime()), guilds: client.guilds.cache.map(guildSummary) });
+    res = json({ ready: client.isReady(), tag: client.user?.tag ?? null, uptimeSec: Math.floor(process.uptime()), guilds: client.guilds.cache.map(guildSummary) });
   } else if (resource === "config") {
     res = (await handleConfig(req, parts)) ?? (await handleConfigAction(req, parts, client));
   } else if (resource === "music") {
@@ -305,13 +369,22 @@ export function startWebServer(client, port = 8787) {
       const url = new URL(req.url);
       try {
         if (url.pathname === "/health") {
-          return json({ status: "ok", uptime: Math.floor(process.uptime()), bot: client.user?.tag ?? "offline" });
+          const ready = client.isReady();
+          return json(
+            { status: ready ? "ok" : "degraded", ready, uptime: Math.floor(process.uptime()), bot: client.user?.tag ?? "offline" },
+            { status: ready ? 200 : 503 },
+          );
         }
         if (url.pathname.startsWith("/api/")) return await handleApi(req, url, client);
         return await serveStatic(url.pathname);
       } catch (err) {
-        console.error("[web] Ошибка запроса:", err);
-        return json({ error: err.message }, { status: 500 });
+        const status = Number(err.status) || 500;
+        if (status < 500) {
+          console.warn(`[web] Отклонён запрос ${req.method} ${url.pathname}: ${status} ${err.message}`);
+        } else {
+          console.error(`[web] Ошибка запроса ${req.method} ${url.pathname}:`, err);
+        }
+        return json({ error: err.message }, { status });
       }
     },
   });

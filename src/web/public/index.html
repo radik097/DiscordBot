@@ -106,8 +106,45 @@
         <button id="musicStop" class="danger">⏹️ Стоп</button>
         <label>Громкость <input type="range" id="musicVolume" min="0" max="200" value="100" /> <span id="musicVolumeLabel">100%</span></label>
       </div>
-      <h3>Очередь</h3>
+      <div class="music-queue-header">
+        <h3>Очередь <span id="musicQueueCount" class="queue-count">0</span></h3>
+        <button id="musicSavePlaylist" title="Скачать текущий трек и всю очередь в локальный кэш" disabled>💾 Сохранить плейлист</button>
+      </div>
+      <div id="musicSaveStatus" class="card music-save-status" hidden>
+        <div class="music-save-row">
+          <strong id="musicSaveTitle">Сохранение плейлиста</strong>
+          <span id="musicSaveNumbers">0 / 0</span>
+        </div>
+        <div class="music-progress-track" role="progressbar" aria-label="Сохранение плейлиста" aria-valuemin="0" aria-valuemax="100">
+          <div id="musicSaveProgress" class="music-progress-bar music-save-progress"></div>
+        </div>
+        <div id="musicSaveDetails" class="hint"></div>
+      </div>
       <ol id="musicQueue"></ol>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="playlists" data-icon="💿" data-title="Плейлисты">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">💿</span>
+      <span class="panel-title">Плейлисты</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="saved-playlists-header">
+        <div>
+          <h3>Локальная библиотека <span id="savedPlaylistCount" class="queue-count">0</span></h3>
+          <div class="hint">Плейлисты показаны свёрнутыми. Нажми на имя, чтобы увидеть треки последней версии.</div>
+        </div>
+        <button id="refreshPlaylists" title="Обновить список">↻</button>
+      </div>
+      <div id="savedPlaylistsError" class="errors"></div>
+      <div id="savedPlaylists" class="saved-playlists"></div>
     </div>
   </article>
 
@@ -236,6 +273,28 @@
   </article>
 
 </main>
+
+<dialog id="playlistNameDialog" class="playlist-dialog">
+  <form id="playlistNameForm">
+    <h2>Сохранить плейлист</h2>
+    <p class="hint">Выбери существующее имя, чтобы создать новую версию без удаления старой, или введи своё.</p>
+    <label>
+      Существующие плейлисты
+      <select id="playlistExistingName">
+        <option value="">Новый плейлист</option>
+      </select>
+    </label>
+    <label>
+      Имя плейлиста
+      <input id="playlistCustomName" maxlength="100" required placeholder="Например: Музыка для работы" />
+    </label>
+    <div id="playlistNameError" class="errors"></div>
+    <div class="dialog-actions">
+      <button id="playlistNameCancel" type="button">Отмена</button>
+      <button id="playlistNameConfirm" type="submit" class="primary">💾 Начать сохранение</button>
+    </div>
+  </form>
+</dialog>
 
 <script src="panels.js"></script>
 <script src="app.js"></script>

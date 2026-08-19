@@ -21,6 +21,7 @@ const YTDLP_PATH = (() => {
 const CACHE_DIR = fileURLToPath(new URL("../../data/cache/audio/", import.meta.url));
 mkdirSync(CACHE_DIR, { recursive: true });
 const MAX_PLAYLIST_TRACKS = 500;
+const cacheDownloads = new Map();
 
 const YTDLP_POT_PROVIDER_URL = process.env.YTDLP_POT_PROVIDER_URL?.trim() ?? "";
 const YTDLP_PLAYER_CLIENT = process.env.YTDLP_PLAYER_CLIENT?.trim()
@@ -202,6 +203,18 @@ function findCachedFile(key) {
   return match ? path.join(CACHE_DIR, match) : null;
 }
 
+export function getAudioCacheEntry(url, quality = "best") {
+  const key = cacheKeyFor(url, quality);
+  const file = findCachedFile(key);
+  if (!file) return null;
+  return {
+    file,
+    fileName: path.basename(file),
+    bytes: statSync(file).size,
+    quality,
+  };
+}
+
 function formatMB(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2);
 }
@@ -261,7 +274,7 @@ function downloadToCache(url, quality, key) {
 }
 
 // Returns a local file path for this track, downloading+caching it first if needed.
-async function ensureCachedFile(url, quality) {
+export async function ensureCachedFile(url, quality = "best") {
   const key = cacheKeyFor(url, quality);
   const existing = findCachedFile(key);
   if (existing) {
@@ -270,13 +283,28 @@ async function ensureCachedFile(url, quality) {
     return existing;
   }
 
+  const activeDownload = cacheDownloads.get(key);
+  if (activeDownload) {
+    console.log(`[cache] Уже скачивается, ожидаю общий результат: ${url} (quality=${quality})`);
+    return activeDownload;
+  }
+
   console.log(`[cache] В кэше нет, скачиваю: ${url} (quality=${quality})`);
-  const start = Date.now();
-  const file = await downloadToCache(url, quality, key);
-  const sizeMB = formatMB(statSync(file).size);
-  const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-  console.log(`[cache] Скачано и закэшировано (${sizeMB} MB за ${elapsedSec}s): ${path.basename(file)}`);
-  return file;
+  const download = (async () => {
+    const start = Date.now();
+    const file = await downloadToCache(url, quality, key);
+    const sizeMB = formatMB(statSync(file).size);
+    const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+    console.log(`[cache] Скачано и закэшировано (${sizeMB} MB за ${elapsedSec}s): ${path.basename(file)}`);
+    return file;
+  })();
+  cacheDownloads.set(key, download);
+
+  try {
+    return await download;
+  } finally {
+    if (cacheDownloads.get(key) === download) cacheDownloads.delete(key);
+  }
 }
 
 export function clearAudioCache() {

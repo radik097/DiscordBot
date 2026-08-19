@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags, AttachmentBuilder } from "discord.js";
-import { loadConfig, saveConfig, buildStructure, wipeStructure, exportStructure } from "../structureManager.js";
+import { loadConfig, saveConfig, buildStructure, wipeStructure, rebuildStructure, exportStructure } from "../structureManager.js";
 
 export const data = new SlashCommandBuilder()
   .setName("setup")
@@ -95,9 +95,8 @@ export async function execute(interaction) {
       await sendLog(interaction, "Готово: wipe", log);
     } else if (sub === "rebuild") {
       const config = loadConfig();
-      const wipeLog = await wipeStructure(guild, config);
-      const buildLog = await buildStructure(guild, config, { botMemberId: guild.members.me?.id });
-      await sendLog(interaction, "Готово: rebuild", [...wipeLog, "---", ...buildLog]);
+      const log = await rebuildStructure(guild, config, { botMemberId: guild.members.me?.id });
+      await sendLog(interaction, "Готово: rebuild", log);
     }
   } catch (err) {
     console.error(err);

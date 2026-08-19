@@ -6,6 +6,7 @@ import {
   VoiceConnectionStatus,
   entersState,
 } from "@discordjs/voice";
+import { randomUUID } from "node:crypto";
 import { getAudioStream } from "./source.js";
 import { saveQueueState, loadQueueState } from "./persistence.js";
 
@@ -18,6 +19,13 @@ const PCM_BYTES_PER_SEC = 48000 * 2 * 2;
 function sanitizeFileName(name) {
   if (!name) return "(без названия)";
   return name.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 100);
+}
+
+function queueTrack(track) {
+  return {
+    ...track,
+    queueId: track?.queueId || randomUUID(),
+  };
 }
 
 class GuildQueue {
@@ -36,24 +44,36 @@ class GuildQueue {
     this.stabilitySamples = [];
     this.lastTelemetrySample = null;
     this.lastStabilityIssue = null;
+    this.playGeneration = 0;
+    this.destroyed = false;
 
     this.player = createAudioPlayer();
     this.player.on("stateChange", (oldState, newState) => {
       console.log(`[music:${guildId}] player: ${oldState.status} -> ${newState.status}`);
     });
-    this.player.on(AudioPlayerStatus.Idle, () => {
-      this.playing = null;
-      this.playNext();
+    this.player.on(AudioPlayerStatus.Idle, (oldState) => {
+      this.handlePlaybackFinished(oldState?.resource?.metadata);
     });
     this.player.on("error", (err) => {
       console.error(`[music:${guildId}] Ошибка плеера:`, err.message, err.resource?.metadata ?? "");
-      this.playing = null;
-      this.playNext();
+      this.handlePlaybackFinished(err.resource?.metadata);
     });
   }
 
+  handlePlaybackFinished(metadata) {
+    if (this.destroyed || metadata?.generation !== this.playGeneration) return;
+    this.playing = null;
+    void this.playNext();
+  }
+
   connect(voiceChannel) {
-    if (this.connection) return;
+    if (this.destroyed) throw new Error("Очередь уже завершена");
+    if (this.connection) {
+      if (this.connection.joinConfig.channelId !== voiceChannel.id) {
+        this.connection.rejoin({ channelId: voiceChannel.id });
+      }
+      return;
+    }
     this.connection = joinVoiceChannel({
       channelId: voiceChannel.id,
       guildId: voiceChannel.guild.id,
@@ -103,10 +123,40 @@ class GuildQueue {
       const available = Math.max(0, MAX_QUEUE_SIZE - this.tracks.length);
       throw new Error(`В очереди недостаточно места: доступно ${available}, требуется ${tracks.length} (максимум ${MAX_QUEUE_SIZE})`);
     }
-    this.tracks.push(...tracks);
+    this.tracks.push(...tracks.map(queueTrack));
     this.clearIdleTimer();
     if (!this.playing) await this.playNext();
+    scheduleQueueSave();
     return tracks.length;
+  }
+
+  removeTrack(queueId) {
+    if (this.destroyed) return null;
+    const index = this.tracks.findIndex((track) => track.queueId === queueId);
+    if (index < 0) return null;
+    const [removed] = this.tracks.splice(index, 1);
+    saveQueueState(queues);
+    return removed;
+  }
+
+  playTrackNow(queueId) {
+    if (this.destroyed) return null;
+    const index = this.tracks.findIndex((track) => track.queueId === queueId);
+    if (index < 0) return null;
+    const [selected] = this.tracks.splice(index, 1);
+    this.tracks.unshift(selected);
+    this.clearIdleTimer();
+    if (this.playing) this.skip();
+    else void this.playNext();
+    saveQueueState(queues);
+    return selected;
+  }
+
+  getPlaylistSnapshot() {
+    if (this.destroyed) return [];
+    return [this.playing, ...this.tracks]
+      .filter(Boolean)
+      .map((track) => ({ ...track }));
   }
 
   killCurrentProcess() {
@@ -243,6 +293,7 @@ class GuildQueue {
   }
 
   async playNext() {
+    const generation = ++this.playGeneration;
     this.killCurrentProcess();
     this.currentResource = null;
     this.currentStreamStats = null;
@@ -256,15 +307,25 @@ class GuildQueue {
     this.playing = next;
     try {
       const { stream, type, process: child, quality, stats } = await getAudioStream(next.url, next._quality ?? "best");
+      if (generation !== this.playGeneration) {
+        stream.destroy();
+        if (!child.killed) child.kill();
+        return;
+      }
       this.currentProcess = child;
       this.currentQuality = quality;
       console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}", quality=${quality}, type=${type}`);
-      const resource = createAudioResource(stream, { inputType: type, inlineVolume: true });
+      const resource = createAudioResource(stream, {
+        inputType: type,
+        inlineVolume: true,
+        metadata: { queueId: next.queueId, generation },
+      });
       resource.volume?.setVolume(this.volume);
       this.currentResource = resource;
       this.player.play(resource);
       this.startStatsLogging(stats);
     } catch (err) {
+      if (generation !== this.playGeneration) return;
       const attempts = (next._attempts ?? 0) + 1;
       console.error(`[music:${this.guildId}] Не удалось получить поток для "${sanitizeFileName(next.title)}" (попытка ${attempts}):`, err.message);
 
@@ -294,23 +355,35 @@ class GuildQueue {
   }
 
   skip() {
-    this.player.stop(true);
+    this.playGeneration += 1;
+    const stopped = this.player.stop(true);
+    this.playing = null;
+    if (!this.destroyed) void this.playNext();
+    scheduleQueueSave();
+    return stopped;
   }
 
   pause() {
+    if (this.destroyed) return false;
     return this.player.pause();
   }
 
   resume() {
+    if (this.destroyed) return false;
     return this.player.unpause();
   }
 
   setVolume(v) {
+    if (this.destroyed) return;
     this.volume = v;
     this.currentResource?.volume?.setVolume(v);
+    scheduleQueueSave();
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.playGeneration += 1;
     this.clearIdleTimer();
     this.stopStatsLogging();
     this.killCurrentProcess();
@@ -329,10 +402,21 @@ class GuildQueue {
     } catch {}
     this.connection = null;
     queues.delete(this.guildId);
+    scheduleQueueSave();
   }
 }
 
 const queues = new Map();
+let saveTimer = null;
+
+function scheduleQueueSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveQueueState(queues);
+  }, 100);
+  saveTimer.unref?.();
+}
 
 export function getQueue(guildId) {
   let q = queues.get(guildId);
@@ -368,12 +452,23 @@ export async function restoreQueueState(client) {
       if (!guild) continue;
 
       const queue = getQueue(guildId);
-      if (data.tracks && Array.isArray(data.tracks)) {
-        queue.tracks = data.tracks;
-        restored += data.tracks.length;
-      }
+      const restoredTracks = [data.playing, ...(Array.isArray(data.tracks) ? data.tracks : [])]
+        .filter((track) => track?.url)
+        .map(queueTrack);
+      queue.tracks = restoredTracks;
+      restored += restoredTracks.length;
+      queue.textChannelId = data.textChannelId ?? null;
       if (data.volume) {
         queue.setVolume(data.volume);
+      }
+      if (restoredTracks.length && data.voiceChannelId) {
+        const voiceChannel = guild.channels.cache.get(data.voiceChannelId);
+        if (voiceChannel?.isVoiceBased?.()) {
+          queue.connect(voiceChannel);
+          void queue.playNext();
+        } else {
+          console.warn(`[persistence] Голосовой канал ${data.voiceChannelId} больше недоступен — очередь сохранена без автозапуска`);
+        }
       }
     } catch (err) {
       console.error(`[persistence] Ошибка восстановления очереди для гильдии ${guildId}:`, err.message);

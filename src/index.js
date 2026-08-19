@@ -6,6 +6,7 @@ import { loadConfig } from "./structureManager.js";
 import { loadCommandModules } from "./commandLoader.js";
 import { startWebServer } from "./web/server.js";
 import { saveAllQueues, restoreQueueState } from "./music/queue.js";
+import { resumePlaylistSaveJobs } from "./music/library.js";
 
 process.env.FFMPEG_PATH ??= ffmpegPath;
 
@@ -56,6 +57,7 @@ async function logToBotChannel(guild, text) {
 client.once("clientReady", async () => {
   console.log(`Вошёл как ${client.user.tag}`);
   await restoreQueueState(client);
+  resumePlaylistSaveJobs();
   startWebServer(client, WEB_PORT ? Number(WEB_PORT) : 8787);
 });
 
@@ -155,27 +157,52 @@ client.on("messageDelete", (message) => {
   logDelete(message.id);
 });
 
-client.login(DISCORD_TOKEN);
+client.on("shardDisconnect", (_event, shardId) => {
+  console.warn(`[discord] Шард ${shardId} отключён, ожидаю автоматическое переподключение`);
+});
+client.on("shardReconnecting", (shardId) => {
+  console.warn(`[discord] Шард ${shardId} переподключается`);
+});
+client.on("shardResume", (shardId, replayedEvents) => {
+  console.log(`[discord] Сессия шарда ${shardId} восстановлена, событий повторено: ${replayedEvents}`);
+});
+client.on("shardError", (err, shardId) => {
+  console.error(`[discord] Ошибка WebSocket шарда ${shardId}:`, err.message);
+});
+client.on("error", (err) => console.error("[discord] Ошибка клиента:", err.message));
+client.on("warn", (message) => console.warn("[discord]", message));
+
+let shuttingDown = false;
+async function shutdown(reason, exitCode = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${reason}, сохраняю состояние и завершаю работу...`);
+  saveAllQueues();
+  try {
+    await client.destroy();
+  } catch (err) {
+    console.error("[shutdown] Ошибка завершения Discord-клиента:", err.message);
+  }
+  process.exit(exitCode);
+}
+
+client.on("invalidated", () => {
+  console.error("[discord] Сессия признана недействительной — перезапускаю процесс для чистого входа");
+  void shutdown("Discord-сессия недействительна", 1);
+});
+
+client.login(DISCORD_TOKEN).catch((err) => {
+  console.error("[discord] Не удалось войти:", err.message);
+  void shutdown("Ошибка входа в Discord", 1);
+});
 
 // Graceful shutdown handlers
-process.on("SIGTERM", async () => {
-  console.log("[shutdown] Получен SIGTERM, начинаю graceful shutdown...");
-  saveAllQueues();
-  await client.destroy();
-  process.exit(0);
-});
-
-process.on("SIGINT", async () => {
-  console.log("[shutdown] Получен SIGINT, начинаю graceful shutdown...");
-  saveAllQueues();
-  await client.destroy();
-  process.exit(0);
-});
+process.on("SIGTERM", () => void shutdown("Получен SIGTERM"));
+process.on("SIGINT", () => void shutdown("Получен SIGINT"));
 
 process.on("uncaughtException", (err) => {
   console.error("[uncaught] Необработанное исключение:", err);
-  saveAllQueues();
-  process.exit(1);
+  void shutdown("Необработанное исключение", 1);
 });
 
 process.on("unhandledRejection", (reason) => {

@@ -1,5 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 const STATE_PATH = new URL("../../data/queue-state.json", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -18,11 +17,15 @@ export function saveQueueState(queues) {
           playing: queue.playing,
           tracks: queue.tracks,
           volume: queue.volume,
+          voiceChannelId: queue.connection?.joinConfig?.channelId ?? null,
+          textChannelId: queue.textChannelId ?? null,
           savedAt: Date.now(),
         };
       }
     }
-    writeFileSync(STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+    const temporary = `${STATE_PATH}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify(state, null, 2), "utf-8");
+    renameSync(temporary, STATE_PATH);
     console.log(`[persistence] Сохранено состояние ${Object.keys(state).length} очередей`);
   } catch (err) {
     console.error(`[persistence] Ошибка сохранения состояния:`, err.message);
@@ -46,9 +49,8 @@ export function loadQueueState() {
 
 export function clearQueueState() {
   try {
-    const fs = require("node:fs");
-    if (fs.existsSync(STATE_PATH)) {
-      fs.unlinkSync(STATE_PATH);
+    if (existsSync(STATE_PATH)) {
+      unlinkSync(STATE_PATH);
     }
     console.log(`[persistence] Состояние очередей очищено`);
   } catch (err) {

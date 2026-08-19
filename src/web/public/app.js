@@ -1,10 +1,27 @@
-const state = { guildId: null, config: null };
+const SELECTED_GUILD_KEY = "discordBot.selectedGuild";
+let savedGuildId = null;
+try {
+  savedGuildId = localStorage.getItem(SELECTED_GUILD_KEY);
+} catch {}
+const state = { guildId: savedGuildId, config: null, playlists: [] };
 
 async function api(path, opts) {
-  const res = await fetch(path, {
-    ...opts,
-    headers: { "content-type": "application/json", ...(opts?.headers ?? {}) },
-  });
+  const controller = new AbortController();
+  const timeoutMs = opts?.timeoutMs ?? (opts?.method && opts.method !== "GET" ? 120000 : 30000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(path, {
+      ...opts,
+      signal: opts?.signal ?? controller.signal,
+      headers: { "content-type": "application/json", ...(opts?.headers ?? {}) },
+    });
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error(`Таймаут запроса (${Math.round(timeoutMs / 1000)} с)`);
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || data.errors?.join(", ") || `HTTP ${res.status}`);
   return data;
@@ -28,7 +45,7 @@ function fmtTime(ts) {
 
 async function loadStatus() {
   const status = await api("/api/status");
-  document.getElementById("botTag").textContent = status.tag ? `🟢 ${status.tag}` : "🔴 не в сети";
+  document.getElementById("botTag").textContent = status.ready && status.tag ? `🟢 ${status.tag}` : "🔴 не в сети";
   document.getElementById("uptime").textContent = `аптайм: ${Math.floor(status.uptimeSec / 60)} мин`;
 
   const select = document.getElementById("guildSelect");
@@ -39,19 +56,37 @@ async function loadStatus() {
     opt.textContent = `${g.name} (${g.memberCount})`;
     select.appendChild(opt);
   }
-  if (!state.guildId && status.guilds.length) state.guildId = status.guilds[0].id;
+  if (!status.guilds.some((guild) => guild.id === state.guildId)) {
+    state.guildId = status.guilds[0]?.id ?? null;
+  }
   select.value = state.guildId;
 
   const info = status.guilds.find((g) => g.id === state.guildId);
   document.getElementById("guildInfo").innerHTML = info
-    ? `<b>${info.name}</b><br/>ID: ${info.id}<br/>Участников: ${info.memberCount}`
+    ? `<b>${escapeHtml(info.name)}</b><br/>ID: ${escapeHtml(info.id)}<br/>Участников: ${Number(info.memberCount) || 0}`
     : "Бот не состоит ни в одном сервере.";
+}
+
+async function settleTasks(tasks, context) {
+  const results = await Promise.allSettled(tasks);
+  for (const result of results) {
+    if (result.status === "rejected") console.warn(`[${context}]`, result.reason);
+  }
 }
 
 document.getElementById("guildSelect").addEventListener("change", async (e) => {
   state.guildId = e.target.value;
+  state.playlists = [];
+  const playlistDialog = document.getElementById("playlistNameDialog");
+  if (playlistDialog.open) playlistDialog.close();
+  try {
+    localStorage.setItem(SELECTED_GUILD_KEY, state.guildId);
+  } catch {}
   lastQueueSignature = "";
-  await Promise.all([loadStatus(), loadMusic(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()]);
+  await settleTasks(
+    [loadStatus(), loadMusic(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()],
+    "guild-change",
+  );
 });
 
 // --- Config -------------------------------------------------------------
@@ -174,6 +209,156 @@ const VOICE_STATE_LABELS = {
 let musicLoadInFlight = false;
 let lastQueueSignature = "";
 
+const PLAYLIST_SAVE_LABELS = {
+  running: "Скачивание идёт в фоне",
+  completed: "Плейлист сохранён локально",
+  completed_with_errors: "Сохранено с ошибками",
+  failed: "Не удалось сохранить плейлист",
+};
+
+const PLAYLIST_TRACK_STATUS = {
+  pending: "ожидает",
+  downloading: "скачивается",
+  cached: "в кэше",
+  downloaded: "скачан",
+  failed: "ошибка",
+};
+
+function playlistDate(timestamp) {
+  return timestamp ? new Date(timestamp).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" }) : "—";
+}
+
+async function loadPlaylistDetails(details, playlistId) {
+  const guildId = state.guildId;
+  const body = details.querySelector(".playlist-details");
+  if (!body || body.dataset.loaded === "true") return;
+  body.textContent = "Загружаю треки…";
+  try {
+    const { playlist } = await api(`/api/music/${guildId}/playlists/${encodeURIComponent(playlistId)}`);
+    if (guildId !== state.guildId || !details.isConnected) return;
+    body.textContent = "";
+    const summary = document.createElement("div");
+    summary.className = "hint";
+    summary.textContent = `${playlist.completed || 0} из ${playlist.total || 0} обработано · сохранено ${playlistDate(playlist.updatedAt)}`;
+    const tracks = document.createElement("ol");
+    tracks.className = "playlist-tracks";
+    for (const track of playlist.tracks) {
+      const item = document.createElement("li");
+      item.textContent = `${track.title} (${fmtDuration(track.durationSec)}) · ${PLAYLIST_TRACK_STATUS[track.status] ?? track.status ?? "неизвестно"}`;
+      tracks.appendChild(item);
+    }
+    body.append(summary, tracks);
+    body.dataset.loaded = "true";
+  } catch (err) {
+    body.textContent = `Ошибка загрузки: ${err.message}`;
+  }
+}
+
+function renderSavedPlaylists(playlists) {
+  const root = document.getElementById("savedPlaylists");
+  const openIds = new Set([...root.querySelectorAll("details[open]")].map((item) => item.dataset.playlistId));
+  root.textContent = "";
+  document.getElementById("savedPlaylistCount").textContent = playlists.length;
+
+  if (!playlists.length) {
+    const empty = document.createElement("div");
+    empty.className = "playlist-empty";
+    empty.textContent = "Сохранённых плейлистов пока нет.";
+    root.appendChild(empty);
+    return;
+  }
+
+  for (const playlist of playlists) {
+    const details = document.createElement("details");
+    details.className = "saved-playlist";
+    details.dataset.playlistId = playlist.id;
+
+    const summary = document.createElement("summary");
+    summary.className = "playlist-summary";
+    const main = document.createElement("span");
+    main.className = "playlist-summary-main";
+    const chevron = document.createElement("span");
+    chevron.className = "playlist-chevron";
+    chevron.textContent = "›";
+    const text = document.createElement("span");
+    text.style.minWidth = "0";
+    const title = document.createElement("span");
+    title.className = "playlist-title";
+    title.textContent = playlist.title;
+    const meta = document.createElement("span");
+    meta.className = "playlist-meta";
+    const versionLabel = playlist.versions > 1 ? ` · версий: ${playlist.versions}` : "";
+    meta.textContent = `${playlist.total || 0} треков${versionLabel} · ${playlistDate(playlist.updatedAt)}`;
+    text.append(title, meta);
+    main.append(chevron, text);
+
+    const status = document.createElement("span");
+    status.className = `playlist-status ${playlist.status || ""}`;
+    status.textContent = PLAYLIST_SAVE_LABELS[playlist.status] ?? playlist.status ?? "сохранён";
+    summary.append(main, status);
+
+    const body = document.createElement("div");
+    body.className = "playlist-details";
+    body.textContent = "Откройте плейлист, чтобы загрузить список треков.";
+    details.append(summary, body);
+    details.addEventListener("toggle", () => {
+      if (details.open) void loadPlaylistDetails(details, playlist.id);
+    });
+    root.appendChild(details);
+
+    if (openIds.has(playlist.id)) {
+      details.open = true;
+      void loadPlaylistDetails(details, playlist.id);
+    }
+  }
+}
+
+async function loadPlaylists() {
+  if (!state.guildId) return;
+  const guildId = state.guildId;
+  try {
+    const { playlists } = await api(`/api/music/${guildId}/playlists`);
+    if (guildId !== state.guildId) return;
+    state.playlists = playlists;
+    renderSavedPlaylists(playlists);
+    document.getElementById("savedPlaylistsError").textContent = "";
+  } catch (err) {
+    document.getElementById("savedPlaylistsError").textContent = `Ошибка обновления: ${err.message}`;
+  }
+}
+
+function renderPlaylistSave(save, hasTracks) {
+  const button = document.getElementById("musicSavePlaylist");
+  const card = document.getElementById("musicSaveStatus");
+  const running = save?.status === "running";
+  button.disabled = !hasTracks || running;
+  button.textContent = running ? "⏳ Сохраняется…" : "💾 Сохранить плейлист";
+
+  if (!save) {
+    card.hidden = true;
+    return;
+  }
+
+  card.hidden = false;
+  const total = Math.max(0, Number(save.total) || 0);
+  const completed = Math.max(0, Number(save.completed) || 0);
+  const percent = total ? Math.min(100, (completed / total) * 100) : 0;
+  document.getElementById("musicSaveTitle").textContent = PLAYLIST_SAVE_LABELS[save.status] ?? save.status;
+  document.getElementById("musicSaveNumbers").textContent = `${completed} / ${total}`;
+  const progress = document.getElementById("musicSaveProgress");
+  progress.style.width = `${percent}%`;
+  progress.parentElement.setAttribute("aria-valuenow", percent.toFixed(1));
+
+  const parts = [
+    `скачано: ${Number(save.downloaded) || 0}`,
+    `уже было в кэше: ${Number(save.alreadyCached) || 0}`,
+  ];
+  if (save.failed) parts.push(`ошибок: ${save.failed}`);
+  if (running && save.currentTitle) parts.push(`сейчас: ${save.currentTitle}`);
+  else if (save.relativeManifest) parts.push(`список: data/${save.relativeManifest}`);
+  document.getElementById("musicSaveDetails").textContent = parts.join(" · ");
+}
+
 async function loadMusic() {
   if (!state.guildId) return;
   if (musicLoadInFlight) return;
@@ -222,17 +407,44 @@ async function loadMusic() {
       document.getElementById("musicProgressBar").style.width = "0%";
     }
 
-    const queueSignature = `${data.tracks.length}|${data.tracks[0]?.url ?? ""}|${data.tracks.at(-1)?.url ?? ""}`;
+    const queueSignature = data.tracks.map((track) => track.queueId || track.url).join("|");
     if (queueSignature !== lastQueueSignature) {
       lastQueueSignature = queueSignature;
       const list = document.getElementById("musicQueue");
       list.innerHTML = "";
       for (const t of data.tracks) {
         const li = document.createElement("li");
-        li.textContent = `${t.title} (${fmtDuration(t.durationSec)}) — ${t.requestedBy}`;
+        const info = document.createElement("span");
+        info.className = "queue-track-info";
+        info.textContent = `${t.title} (${fmtDuration(t.durationSec)}) — ${t.requestedBy}`;
+
+        const actions = document.createElement("span");
+        actions.className = "queue-track-actions";
+        const playButton = document.createElement("button");
+        playButton.type = "button";
+        playButton.className = "queue-track-play";
+        playButton.dataset.queueId = t.queueId;
+        playButton.dataset.operation = "play";
+        playButton.title = `Включить сейчас: ${t.title}`;
+        playButton.setAttribute("aria-label", playButton.title);
+        playButton.textContent = "▶";
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "queue-track-remove";
+        removeButton.dataset.queueId = t.queueId;
+        removeButton.dataset.operation = "remove";
+        removeButton.title = `Удалить из очереди: ${t.title}`;
+        removeButton.setAttribute("aria-label", removeButton.title);
+        removeButton.textContent = "✕";
+
+        actions.append(playButton, removeButton);
+        li.append(info, actions);
         list.appendChild(li);
       }
     }
+    document.getElementById("musicQueueCount").textContent = data.tracks.length;
+    renderPlaylistSave(data.playlistSave, Boolean(data.playing || data.tracks.length));
 
     const vol = document.getElementById("musicVolume");
     if (document.activeElement !== vol) vol.value = Math.round((data.volume ?? 1) * 100);
@@ -262,7 +474,106 @@ document.getElementById("musicVolume").addEventListener("change", (e) => {
   musicAction("volume", { level: Number(e.target.value) });
 });
 
+document.getElementById("musicQueue").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-queue-id]");
+  if (!button) return;
+  button.disabled = true;
+  const operation = button.dataset.operation;
+  try {
+    const result = await api(`/api/music/${state.guildId}/track`, {
+      method: "POST",
+      body: JSON.stringify({ queueId: button.dataset.queueId, operation }),
+    });
+    document.getElementById("musicError").textContent = operation === "play"
+      ? `▶️ Включаю «${result.track.title}»`
+      : `🗑️ «${result.track.title}» удалён из очереди`;
+    lastQueueSignature = "";
+  } catch (err) {
+    document.getElementById("musicError").textContent = "Ошибка: " + err.message;
+  } finally {
+    loadMusic();
+  }
+});
+
+function suggestedPlaylistName() {
+  const date = new Date().toLocaleDateString("ru-RU");
+  return `Плейлист ${date}`;
+}
+
+async function openPlaylistNameDialog() {
+  const dialog = document.getElementById("playlistNameDialog");
+  if (dialog.open) return;
+  const select = document.getElementById("playlistExistingName");
+  const input = document.getElementById("playlistCustomName");
+  document.getElementById("playlistNameError").textContent = "";
+  await loadPlaylists();
+  select.textContent = "";
+  const fresh = document.createElement("option");
+  fresh.value = "";
+  fresh.textContent = "Новый плейлист";
+  select.appendChild(fresh);
+  for (const playlist of state.playlists) {
+    const option = document.createElement("option");
+    option.value = playlist.title;
+    option.textContent = playlist.title;
+    select.appendChild(option);
+  }
+  select.value = "";
+  input.value = suggestedPlaylistName();
+  dialog.showModal();
+  input.focus();
+  input.select();
+}
+
+document.getElementById("musicSavePlaylist").addEventListener("click", () => {
+  void openPlaylistNameDialog();
+});
+
+document.getElementById("playlistExistingName").addEventListener("change", (event) => {
+  const input = document.getElementById("playlistCustomName");
+  input.value = event.target.value || suggestedPlaylistName();
+  input.focus();
+  input.select();
+});
+
+document.getElementById("playlistNameCancel").addEventListener("click", () => {
+  document.getElementById("playlistNameDialog").close();
+});
+
+document.getElementById("playlistNameForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const dialog = document.getElementById("playlistNameDialog");
+  const confirm = document.getElementById("playlistNameConfirm");
+  const title = document.getElementById("playlistCustomName").value.trim();
+  const error = document.getElementById("playlistNameError");
+  error.textContent = "";
+  if (!title) {
+    error.textContent = "Введите имя плейлиста.";
+    return;
+  }
+  confirm.disabled = true;
+  try {
+    const result = await api(`/api/music/${state.guildId}/save-playlist`, {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+    dialog.close();
+    document.getElementById("musicError").textContent = result.job.alreadyRunning
+      ? "Сохранение этого плейлиста уже выполняется."
+      : `💾 «${result.job.title}»: фоновое сохранение ${result.job.total} треков запущено`;
+  } catch (err) {
+    error.textContent = "Ошибка сохранения: " + err.message;
+  } finally {
+    confirm.disabled = false;
+    void loadMusic();
+    void loadPlaylists();
+  }
+});
+
+document.getElementById("refreshPlaylists").addEventListener("click", () => void loadPlaylists());
+
 setInterval(() => loadMusic(), 1000);
+setInterval(() => void loadPlaylists(), 5000);
 
 // --- Voice ------------------------------------------------------------
 
@@ -373,9 +684,11 @@ async function loadModeration() {
         } catch (err) {
           statusEl.textContent = "Ошибка: " + err.message;
         }
-        loadModeration();
+        void loadModeration().catch((err) => console.warn("[moderation]", err));
       });
-      li.innerHTML = `<span>${m.tag} (${m.id})</span>`;
+      const label = document.createElement("span");
+      label.textContent = `${m.tag} (${m.id})`;
+      li.appendChild(label);
       li.appendChild(btn);
       el.appendChild(li);
     }
@@ -397,7 +710,7 @@ document.querySelectorAll(".modform button").forEach((btn) => {
     try {
       await api(`/api/moderation/${state.guildId}/${btn.dataset.action}`, { method: "POST", body: JSON.stringify({ userId, reason }) });
       statusEl.textContent = "✅ Готово.";
-      loadModeration();
+      void loadModeration().catch((err) => console.warn("[moderation]", err));
     } catch (err) {
       statusEl.textContent = "Ошибка: " + err.message;
     }
@@ -428,7 +741,7 @@ document.getElementById("historyLoad").addEventListener("click", async () => {
   for (const m of messages) {
     const div = document.createElement("div");
     div.className = "msg" + (m.deleted_at ? " deleted" : "");
-    div.innerHTML = `<div class="meta">${m.author_tag} — ${fmtTime(m.created_at)}${m.edited_at ? " (ред.)" : ""}${m.deleted_at ? " (удалено)" : ""}</div><div>${m.content ? escapeHtml(m.content) : "<i>(без текста)</i>"}</div>`;
+    div.innerHTML = `<div class="meta">${escapeHtml(m.author_tag || "?")} — ${fmtTime(m.created_at)}${m.edited_at ? " (ред.)" : ""}${m.deleted_at ? " (удалено)" : ""}</div><div>${m.content ? escapeHtml(m.content) : "<i>(без текста)</i>"}</div>`;
     list.appendChild(div);
   }
 });
@@ -501,9 +814,17 @@ async function loadStats() {
 // --- Boot --------------------------------------------------------------
 
 (async function boot() {
-  await loadStatus();
-  await Promise.all([loadConfigEditor(), loadMusic(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()]);
-  await loadVoiceMembers();
+  try {
+    await loadStatus();
+    await settleTasks(
+      [loadConfigEditor(), loadMusic(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()],
+      "boot",
+    );
+    await loadVoiceMembers();
+  } catch (err) {
+    document.getElementById("botTag").textContent = "🔴 панель недоступна";
+    console.error("[boot]", err);
+  }
 })();
 
-setInterval(loadStatus, 15000);
+setInterval(() => void loadStatus().catch((err) => console.warn("[status]", err)), 15000);
