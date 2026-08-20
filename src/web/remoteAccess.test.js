@@ -38,7 +38,11 @@ describe("mobile remote access", () => {
       const cookie = access.sessionCookie(session.sessionToken, session.expiresAt);
       expect(cookie).toContain("HttpOnly");
       expect(cookie).toContain("Secure");
-      const auth = access.isAuthenticated(new Request("https://demo.ngrok.app/", { headers: { cookie } }));
+      const auth = access.isAuthenticated(new Request("https://demo.ngrok.app/", { headers: {
+        cookie,
+        "user-agent": "Mozilla/5.0 (Linux; Android 15) Chrome/140",
+        "x-forwarded-for": "203.0.113.2",
+      } }));
       expect(auth).toBeTruthy();
       expect(typeof auth).toBe("object");
       const deviceId = access.listSessions()[0].id;
@@ -67,11 +71,33 @@ describe("mobile remote access", () => {
       const cookie = first.sessionCookie(issued.sessionToken, issued.expiresAt);
       const restored = new RemoteAccess({ sessionFile });
       expect(restored.listSessions()).toHaveLength(1);
-      expect(typeof restored.isAuthenticated(new Request("https://stable.ngrok.app/", { headers: { cookie } }))).toBe("object");
+      expect(typeof restored.isAuthenticated(new Request("https://stable.ngrok.app/", { headers: {
+        cookie,
+        "user-agent": "Safari iPhone",
+      } }))).toBe("object");
     } finally {
       if (oldToken === undefined) delete process.env.NGROK_AUTHTOKEN;
       else process.env.NGROK_AUTHTOKEN = oldToken;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("server mode creates pairing links for an externally managed Cloudflare tunnel", async () => {
+    const access = new RemoteAccess({
+      sessionFile: null,
+      deploymentMode: "server",
+      remoteProvider: "cloudflare",
+      publicBaseUrl: "https://panel.example.com/dashboard",
+      tunnelFactory: async () => { throw new Error("Cloudflare mode must not start ngrok"); },
+    });
+    const pairing = await access.start();
+    expect(pairing.publicUrl).toBe("https://panel.example.com");
+    expect(pairing.connectUrl.startsWith("https://panel.example.com/connect?token=")).toBe(true);
+    expect(access.status()).toMatchObject({
+      enabled: true,
+      configured: true,
+      deploymentMode: "server",
+      provider: "cloudflare",
+    });
   });
 });

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import QRCode from "qrcode";
+import { resolveRuntimeConfig } from "../runtimeConfig.js";
 import {
   clearAllSavedMobileSessions,
   clearExpiredMobileSessions,
@@ -95,10 +96,21 @@ export function isLocalRequest(req) {
 }
 
 export class RemoteAccess {
-  constructor({ port, tunnelFactory, sessionFile = SESSION_FILE } = {}) {
+  constructor({
+    port,
+    tunnelFactory,
+    sessionFile = SESSION_FILE,
+    deploymentMode,
+    remoteProvider,
+    publicBaseUrl,
+  } = {}) {
+    const runtime = resolveRuntimeConfig(process.env, { deploymentMode, remoteProvider, publicBaseUrl });
     this.port = Number(port) || 8787;
     this.tunnelFactory = tunnelFactory;
     this.sessionFile = sessionFile;
+    this.deploymentMode = runtime.deploymentMode;
+    this.remoteProvider = runtime.remoteProvider;
+    this.publicBaseUrl = runtime.publicBaseUrl;
     this.listener = null;
     this.publicUrl = null;
     this.pairings = new Map();
@@ -261,6 +273,15 @@ export class RemoteAccess {
   async start() {
     if (this.startPromise) return this.startPromise;
     if (this.listener && this.publicUrl) return this.issuePairing();
+    if (this.remoteProvider === "disabled") {
+      const err = new Error("Удалённый доступ отключён через REMOTE_ACCESS_PROVIDER=disabled.");
+      err.status = 400;
+      throw err;
+    }
+    if (this.remoteProvider === "cloudflare") {
+      this.publicUrl = this.publicBaseUrl;
+      return this.issuePairing();
+    }
     if (!process.env.NGROK_AUTHTOKEN) {
       const err = new Error("NGROK_AUTHTOKEN не задан. Добавьте токен ngrok в .env и перезапустите Docker.");
       err.status = 400;
@@ -383,13 +404,17 @@ export class RemoteAccess {
     const devices = this.listSessions();
     const pairExpiresAt = this.pairings.size ? Math.max(...this.pairings.values()) : null;
     return {
-      enabled: Boolean(this.listener),
+      enabled: Boolean(this.publicUrl),
       publicUrl: this.publicUrl,
       pairExpiresAt,
       activePairings: this.pairings.size,
       sessions: devices.length,
       devices,
-      configured: Boolean(process.env.NGROK_AUTHTOKEN),
+      deploymentMode: this.deploymentMode,
+      provider: this.remoteProvider,
+      configured: this.remoteProvider === "cloudflare"
+        ? Boolean(this.publicBaseUrl)
+        : this.remoteProvider === "ngrok" && Boolean(process.env.NGROK_AUTHTOKEN),
     };
   }
 

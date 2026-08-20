@@ -7,6 +7,7 @@ import { loadCommandModules } from "./commandLoader.js";
 import { startWebServer } from "./web/server.js";
 import { saveAllQueues, restoreQueueState } from "./music/queue.js";
 import { resumePlaylistSaveJobs } from "./music/library.js";
+import { resolveRuntimeConfig } from "./runtimeConfig.js";
 
 process.env.FFMPEG_PATH ??= ffmpegPath;
 
@@ -14,6 +15,14 @@ const NEWCOMER_ROLE = "Новичок";
 const MEMBER_ROLE = "Участник";
 
 const { DISCORD_TOKEN, WEB_PORT } = process.env;
+let runtimeConfig;
+try {
+  runtimeConfig = resolveRuntimeConfig();
+} catch (err) {
+  console.error(`[config] ${err.message}`);
+  process.exit(1);
+}
+console.log(`[config] Режим: ${runtimeConfig.deploymentMode}; удалённый доступ: ${runtimeConfig.remoteProvider}`);
 if (!DISCORD_TOKEN) {
   console.error("DISCORD_TOKEN не задан в .env");
   process.exit(1);
