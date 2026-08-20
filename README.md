@@ -1,6 +1,6 @@
 # 🤖 Discord Bot
 
-Текущая версия: **1.8.0**. Подробное описание изменений — в
+Текущая версия: **1.8.1**. Подробное описание изменений — в
 [CHANGELOG.md](CHANGELOG.md).
 
 Discord-бот на discord.js/Bun: управление структурой сервера (роли, каналы, права),
@@ -27,12 +27,12 @@ Discord-бот на discord.js/Bun: управление структурой с
 
 ### Веб-панель
 
-![Веб-панель DiscordBot 1.8.0 с демонстрационными данными](docs/screenshots/desktop-dashboard.png)
+![Веб-панель DiscordBot 1.8.1 с демонстрационными данными](docs/screenshots/desktop-dashboard.png)
 
 ### Мобильная версия
 
 <p align="center">
-  <img src="docs/screenshots/mobile-dashboard.png" alt="Мобильная панель DiscordBot 1.8.0 с демонстрационными данными" width="390">
+  <img src="docs/screenshots/mobile-dashboard.png" alt="Мобильная панель DiscordBot 1.8.1 с демонстрационными данными" width="390">
 </p>
 
 ---
@@ -73,12 +73,50 @@ docker compose exec discord-bot bun run src/deploy-commands.js
 DISCORD_TOKEN=   # обязательно — Bot Token из Developer Portal
 CLIENT_ID=       # обязательно — Application ID
 GUILD_ID=        # опционально — для мгновенной регистрации команд на одном сервере
-WEB_PORT=8787    # опционально
-NGROK_AUTHTOKEN= # опционально — для мобильного доступа
-NGROK_DOMAIN=    # опционально — закреплённый ngrok hostname
-COMPOSE_PROFILES=pot                                  # опционально
+DEPLOYMENT_MODE=local             # local или server
+REMOTE_ACCESS_PROVIDER=auto       # local -> ngrok, server -> cloudflare
+COMPOSE_PROFILES=pot              # для VPS: server,pot
+WEB_PORT=8787
+WEB_BIND_ADDRESS=127.0.0.1
+NGROK_AUTHTOKEN=                  # только для local-режима
+NGROK_DOMAIN=                     # опциональный закреплённый ngrok hostname
+PUBLIC_BASE_URL=                  # server: https://panel.example.com
+CLOUDFLARE_TUNNEL_TOKEN=          # server: токен Cloudflare Tunnel
 YTDLP_POT_PROVIDER_URL=http://bgutil-provider:4416   # опционально
 ```
+
+### Режимы Docker
+
+Локальный компьютер — панель доступна на loopback, а мобильный доступ по кнопке
+запускает ngrok:
+
+```env
+DEPLOYMENT_MODE=local
+REMOTE_ACCESS_PROVIDER=auto
+COMPOSE_PROFILES=pot
+NGROK_AUTHTOKEN=...
+```
+
+Постоянный VPS — ngrok не запускается, а отдельный контейнер `cloudflared`
+подключает домен к панели:
+
+```env
+DEPLOYMENT_MODE=server
+REMOTE_ACCESS_PROVIDER=auto
+COMPOSE_PROFILES=server,pot
+PUBLIC_BASE_URL=https://panel.example.com
+CLOUDFLARE_TUNNEL_TOKEN=...
+
+# Рекомендуется для VPS с 8 GB RAM
+BOT_MEMORY_LIMIT=5g
+BOT_MEMORY_RESERVATION=2g
+BOT_CPU_LIMIT=3.0
+```
+
+В Cloudflare Tunnel публичный hostname должен направляться на внутренний адрес
+`http://discord-bot:8787`. Порт панели на публичном интерфейсе VPS открывать не
+нужно. Первичный QR создаётся из панели, открытой через SSH port forwarding на
+`http://127.0.0.1:8787`; последующие мобильные сессии сохраняются в SQLite.
 
 ### `config/structure.json`
 Не коммитится в репозиторий (см. `.gitignore`) — это конфигурация конкретного
@@ -100,8 +138,9 @@ Discord-сервера. Шаблон лежит в `config/structure.example.jso
 
 ### Docker
 ```bash
-docker compose up -d --build               # собрать/запустить 1.8.0
+docker compose up -d --build               # собрать/запустить 1.8.1
 docker compose --profile pot up -d --build # запустить вместе с PO Token Provider
+docker compose --profile server --profile pot up -d --build # VPS + Cloudflare
 docker compose down          # остановить и удалить контейнер
 docker compose logs -f       # логи в реальном времени
 docker compose restart       # перезапуск
@@ -188,6 +227,9 @@ discord-bot/
 
 - Веб-панель слушает `0.0.0.0` внутри контейнера, но наружу пробрасывается только
   на `127.0.0.1` хоста (см. `docker-compose.yml`).
+- В режиме `server` внешний HTTPS предоставляет Cloudflare Tunnel; контейнер
+  `cloudflared` не требует входящих портов. Ngrok используется только в режиме
+  `local` и только после нажатия кнопки подключения телефона.
 - Удалённый доступ включается только по запросу и требует QR-pairing; сессии
   можно просматривать и отзывать в панели; изменяющие запросы защищены
   проверками прав, CSRF-токенами и rate limiting.

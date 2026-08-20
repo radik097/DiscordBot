@@ -43,12 +43,17 @@ function renderPhoneAccess(data) {
   url.textContent = data.publicUrl ?? "";
   disable.hidden = !data.enabled;
   document.getElementById("phoneStart").textContent = data.enabled ? "Новый QR-код" : "Создать QR-код";
+  const providerName = data.provider === "cloudflare" ? "Cloudflare" : "ngrok";
   document.getElementById("phoneHint").textContent = data.pairExpiresAt
     ? data.qrSvg
-      ? `QR-токен действует до ${new Date(data.pairExpiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}. Перезагрузка страницы не меняет токен — новый создаётся только кнопкой «Новый QR-код». На странице ngrok нажмите «Visit Site», затем подтвердите подключение устройства.`
+      ? `QR-токен действует до ${new Date(data.pairExpiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}. Перезагрузка страницы не меняет токен — новый создаётся только кнопкой «Новый QR-код». Провайдер: ${providerName}.`
       : `Ранее созданный QR-токен продолжает действовать до ${new Date(data.pairExpiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}, но QR не хранится после перезагрузки страницы. Чтобы показать новый QR, нажмите «Новый QR-код».`
     : data.configured === false
-      ? "Добавьте NGROK_AUTHTOKEN в .env и перезапустите Docker."
+      ? data.provider === "cloudflare"
+        ? "Добавьте PUBLIC_BASE_URL и CLOUDFLARE_TUNNEL_TOKEN в .env, затем запустите server-профиль."
+        : data.provider === "disabled"
+          ? "Удалённый доступ отключён в .env."
+          : "Добавьте NGROK_AUTHTOKEN в .env и перезапустите Docker."
       : "Нажмите «Создать QR-код», затем отсканируйте его телефоном.";
   renderPhoneDevices(data.devices ?? []);
 }

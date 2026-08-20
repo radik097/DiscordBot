@@ -67,7 +67,7 @@ RUN mkdir -p data logs
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8787/health 2>/dev/null || exit 1
+    CMD curl -f "http://localhost:${WEB_PORT:-8787}/health" 2>/dev/null || exit 1
 
 # Запустить бот
 CMD ["bun", "run", "src/index.js"]

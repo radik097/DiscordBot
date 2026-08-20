@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.8.0
+    image: discord-bot:1.8.1
     container_name: discord-bot
     build:
       context: .
@@ -15,6 +15,10 @@ services:
       CLIENT_ID: ${CLIENT_ID}
       GUILD_ID: ${GUILD_ID}
       WEB_PORT: ${WEB_PORT:-8787}
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-local}
+      REMOTE_ACCESS_PROVIDER: ${REMOTE_ACCESS_PROVIDER:-auto}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
       NGROK_DOMAIN: ${NGROK_DOMAIN:-}
       NGROK_DOMAIN_ID: ${NGROK_DOMAIN_ID:-}
@@ -34,17 +38,21 @@ services:
 
     # Проксирование портов
     ports:
-      - "127.0.0.1:8787:8787"  # Web-панель управления — только с этого компьютера
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8787}:${WEB_PORT:-8787}"
 
-    # Настройки ресурсов (опционально)
+    # Жёсткие ограничения работают и в обычном Docker Compose, не только в Swarm.
+    mem_limit: ${BOT_MEMORY_LIMIT:-3g}
+    mem_reservation: ${BOT_MEMORY_RESERVATION:-1g}
+    cpus: ${BOT_CPU_LIMIT:-2.0}
+
     deploy:
       resources:
         limits:
-          cpus: "1"
-          memory: 512M
+          cpus: ${BOT_CPU_LIMIT:-2.0}
+          memory: ${BOT_MEMORY_LIMIT:-3g}
         reservations:
-          cpus: "0.5"
-          memory: 256M
+          cpus: ${BOT_CPU_RESERVATION:-0.5}
+          memory: ${BOT_MEMORY_RESERVATION:-1g}
 
     # Логирование
     logging:
@@ -67,6 +75,29 @@ services:
     restart: unless-stopped
     expose:
       - "4416"
+    mem_limit: ${POT_MEMORY_LIMIT:-512m}
+    cpus: ${POT_CPU_LIMIT:-0.5}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+
+  # Постоянный серверный доступ. Включается только профилем server:
+  # DEPLOYMENT_MODE=server и COMPOSE_PROFILES=server,pot в .env.
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.7.3}
+    container_name: discord-bot-cloudflared
+    profiles: ["server"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:-}"]
+    depends_on:
+      discord-bot:
+        condition: service_healthy
+    mem_limit: ${CLOUDFLARED_MEMORY_LIMIT:-256m}
+    cpus: ${CLOUDFLARED_CPU_LIMIT:-0.25}
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: "json-file"
       options:
