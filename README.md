@@ -1,6 +1,7 @@
 # 🤖 Discord Bot
 
-Текущая версия: **1.9.0**. Подробное описание изменений — в
+Текущая стабильная версия: **1.9.0**; ветка 2.0 использует
+**2.0.0-dev.1**. Подробное описание изменений — в
 [CHANGELOG.md](CHANGELOG.md).
 
 Discord-бот на discord.js/Bun: управление структурой сервера (роли, каналы, права),
@@ -88,6 +89,11 @@ WEB_PORT=8787
 WEB_BIND_ADDRESS=127.0.0.1
 MUSIC_DEFAULT_VOLUME_PERCENT=100 # начальная host-side громкость, 0-200
 MUSIC_FILE_MAX_BYTES=209715200   # максимальный Discord-файл для /play, 200 МБ
+PLUGINS_ROOT=/app/plugins        # карантин и registry плагинов 2.0
+PLUGIN_MAX_FILES=512
+PLUGIN_MAX_PACKAGE_BYTES=52428800
+PLUGIN_MAX_UNPACKED_BYTES=209715200
+PLUGIN_TRUSTED_KEYS_FILE=/app/config/plugin-trusted-keys.json
 NGROK_AUTHTOKEN=                  # только для local-режима
 NGROK_DOMAIN=                     # опциональный закреплённый ngrok hostname
 PUBLIC_BASE_URL=                  # server: https://panel.example.com
@@ -148,7 +154,7 @@ Discord-сервера. Шаблон лежит в `config/structure.example.jso
 
 ### Docker
 ```bash
-docker compose up -d --build               # собрать/запустить 1.9.0
+docker compose up -d --build               # собрать/запустить текущую ветку
 docker compose --profile pot up -d --build # запустить вместе с PO Token Provider
 docker compose --profile server --profile pot up -d --build # VPS + Cloudflare
 docker compose down          # остановить и удалить контейнер
@@ -199,6 +205,24 @@ docker compose --profile pot build --no-cache discord-bot # полная пер�
 При штатном или аварийном перезапуске сохраняются текущий трек, очередь,
 громкость и голосовой канал. После восстановления Discord-сессии бот
 переподключается и продолжает трек с сохранённого таймкода.
+
+### Plugin Platform 2.0 (в разработке)
+
+Каталог `plugins/` монтируется в контейнер как `/app/plugins`. Первый этап
+реализует безопасный scanner: пакет предварительно распаковывается в
+`plugins/quarantine/<upload-id>/package`, после чего администратор запускает:
+
+```bash
+docker compose exec discord-bot bun run plugins:scan -- <upload-id>
+```
+
+Scanner проверяет `plugin.json`, canonical paths, симлинки, лимиты числа и
+размера файлов, SHA-256, native binaries, запрещённые API/imports и Ed25519 для
+`trusted-js`. Результат записывается рядом с пакетом в `scan.json` со статусом
+`permission_review`; сканирование само по себе никогда не включает код плагина.
+Доверенные Ed25519 public keys хранятся локально в JSON-объекте
+`config/plugin-trusted-keys.json` в формате `{ "key-id": "-----BEGIN PUBLIC KEY-----..." }`;
+этот файл исключён из Git.
 
 ---
 

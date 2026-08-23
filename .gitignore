@@ -5,11 +5,17 @@ node_modules/
 # Реальная конфигурация конкретного Discord-сервера — храните локально,
 # коммитьте только config/structure.example.json.
 config/structure.json
+config/plugin-trusted-keys.json
 
 # Данные бота: история сообщений, кэш скачанных треков, состояние очереди, логи.
 # Скрипты (scripts/init-docker.*) создают эти папки автоматически при инициализации.
 data/
 logs/
+
+# Установленные и загруженные плагины являются runtime-данными. В Git остаётся
+# только пустая точка монтирования для Docker Compose.
+plugins/*
+!plugins/.gitkeep
 
 # Скачиваемые бинарники (yt-dlp.exe и т.п.) — не часть исходников.
 bin/

@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.9.0
+    image: discord-bot:2.0.0-dev.1
     container_name: discord-bot
     build:
       context: .
@@ -17,6 +17,11 @@ services:
       WEB_PORT: ${WEB_PORT:-8787}
       MUSIC_DEFAULT_VOLUME_PERCENT: ${MUSIC_DEFAULT_VOLUME_PERCENT:-100}
       MUSIC_FILE_MAX_BYTES: ${MUSIC_FILE_MAX_BYTES:-209715200}
+      PLUGINS_ROOT: ${PLUGINS_ROOT:-/app/plugins}
+      PLUGIN_MAX_FILES: ${PLUGIN_MAX_FILES:-512}
+      PLUGIN_MAX_PACKAGE_BYTES: ${PLUGIN_MAX_PACKAGE_BYTES:-52428800}
+      PLUGIN_MAX_UNPACKED_BYTES: ${PLUGIN_MAX_UNPACKED_BYTES:-209715200}
+      PLUGIN_TRUSTED_KEYS_FILE: ${PLUGIN_TRUSTED_KEYS_FILE:-/app/config/plugin-trusted-keys.json}
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-local}
       REMOTE_ACCESS_PROVIDER: ${REMOTE_ACCESS_PROVIDER:-auto}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
@@ -37,6 +42,8 @@ services:
       - ./data:/app/data
       # Логи (опционально)
       - ./logs:/app/logs
+      # Карантин, одобренные пакеты и registry плагинов 2.0.
+      - ./plugins:/app/plugins
 
     # Проксирование портов
     ports:
