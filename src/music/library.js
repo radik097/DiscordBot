@@ -2,7 +2,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { ensureCachedFile, getAudioCacheEntry } from "./source.js";
+import { ensureCachedFile, getAttachmentCacheEntry, getAudioCacheEntry } from "./source.js";
 
 const PLAYLISTS_DIR = fileURLToPath(new URL("../../data/playlists/", import.meta.url));
 const DOWNLOAD_CONCURRENCY = 2;
@@ -168,6 +168,12 @@ function playlistSnapshot(tracks) {
     startTimeSec: Math.max(0, Number(track.startTimeSec) || 0),
     thumbnail: track.thumbnail ?? null,
     requestedBy: track.requestedBy ?? null,
+    ...(track.sourceType === "attachment" ? {
+      sourceType: "attachment",
+      cacheFile: track.cacheFile,
+      sizeBytes: Number(track.sizeBytes) || null,
+      contentType: track.contentType ?? null,
+    } : {}),
   }));
 }
 
@@ -221,6 +227,15 @@ async function downloadTrack(job, index) {
   await persistJob(job);
 
   try {
+    if (track.sourceType === "attachment") {
+      const cached = await getAttachmentCacheEntry(track.cacheFile);
+      track.status = "cached";
+      track.cacheFile = cached.fileName;
+      track.bytes = cached.bytes;
+      job.alreadyCached += 1;
+      return;
+    }
+
     const cachedBefore = await getAudioCacheEntry(track.url, "best");
     const file = await withDownloadSlot(() => ensureCachedFile(track.url, "best"));
     const cachedAfter = await getAudioCacheEntry(track.url, "best");
@@ -296,6 +311,12 @@ export async function startPlaylistSave(guildId, tracks, title = "Текущий
       startTimeSec: Math.max(0, Number(track.startTimeSec) || 0),
       thumbnail: track.thumbnail ?? null,
       requestedBy: track.requestedBy ?? null,
+      ...(track.sourceType === "attachment" ? {
+        sourceType: "attachment",
+        cacheFile: track.cacheFile,
+        sizeBytes: Number(track.sizeBytes) || null,
+        contentType: track.contentType ?? null,
+      } : {}),
       status: "pending",
     }));
   if (!snapshot.length) throw new Error("В текущем плейлисте нет треков для сохранения");

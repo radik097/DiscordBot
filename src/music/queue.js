@@ -12,9 +12,28 @@ import { saveQueueState, loadQueueState } from "./persistence.js";
 
 const IDLE_LEAVE_MS = 5 * 60 * 1000;
 const MAX_QUEUE_SIZE = 500;
+const MAX_VOLUME_RATIO = 2;
 
 // s16le, 48kHz, stereo => bytes/sec of raw PCM that a fully realtime playback consumes.
 const PCM_BYTES_PER_SEC = 48000 * 2 * 2;
+
+export function normalizeVolumeRatio(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.max(0, Math.min(MAX_VOLUME_RATIO, numeric));
+}
+
+export function volumePercentToRatio(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const percent = Number(value);
+  if (!Number.isFinite(percent)) return null;
+  return normalizeVolumeRatio(percent / 100);
+}
+
+export function getDefaultMusicVolumeRatio(env = process.env) {
+  return volumePercentToRatio(env.MUSIC_DEFAULT_VOLUME_PERCENT) ?? 1;
+}
 
 function sanitizeFileName(name) {
   if (!name) return "(без названия)";
@@ -33,7 +52,7 @@ class GuildQueue {
     this.guildId = guildId;
     this.tracks = [];
     this.playing = null;
-    this.volume = 1;
+    this.volume = getDefaultMusicVolumeRatio();
     this.connection = null;
     this.textChannelId = null;
     this.activePlaylist = null;
@@ -348,7 +367,7 @@ class GuildQueue {
     if (durationSec > 1) this.playbackOffsetSec = Math.min(this.playbackOffsetSec, durationSec - 1);
     scheduleQueueSave();
     try {
-      const { stream, type, process: child, quality, stats } = await getAudioStream(next.url, next._quality ?? "best", this.playbackOffsetSec);
+      const { stream, type, process: child, quality, stats } = await getAudioStream(next, next._quality ?? "best", this.playbackOffsetSec);
       if (generation !== this.playGeneration) {
         stream.destroy();
         if (!child.killed) child.kill();
@@ -418,10 +437,13 @@ class GuildQueue {
   }
 
   setVolume(v) {
-    if (this.destroyed) return;
-    this.volume = v;
-    this.currentResource?.volume?.setVolume(v);
+    if (this.destroyed) return this.volume;
+    const normalized = normalizeVolumeRatio(v);
+    if (normalized === null) throw new TypeError("Громкость должна быть конечным числом от 0 до 2");
+    this.volume = normalized;
+    this.currentResource?.volume?.setVolume(normalized);
     scheduleQueueSave();
+    return normalized;
   }
 
   destroy() {
@@ -505,9 +527,8 @@ export async function restoreQueueState(client) {
       queue.activePlaylist = data.activePlaylist?.id ? data.activePlaylist : null;
       restored += restoredTracks.length;
       queue.textChannelId = data.textChannelId ?? null;
-      if (data.volume) {
-        queue.setVolume(data.volume);
-      }
+      const restoredVolume = normalizeVolumeRatio(data.volume);
+      if (restoredVolume !== null) queue.setVolume(restoredVolume);
       if (restoredTracks.length && data.voiceChannelId) {
         const voiceChannel = guild.channels.cache.get(data.voiceChannelId);
         if (voiceChannel?.isVoiceBased?.()) {

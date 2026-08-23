@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.8.1
+    image: discord-bot:1.9.0
     container_name: discord-bot
     build:
       context: .
@@ -15,6 +15,8 @@ services:
       CLIENT_ID: ${CLIENT_ID}
       GUILD_ID: ${GUILD_ID}
       WEB_PORT: ${WEB_PORT:-8787}
+      MUSIC_DEFAULT_VOLUME_PERCENT: ${MUSIC_DEFAULT_VOLUME_PERCENT:-100}
+      MUSIC_FILE_MAX_BYTES: ${MUSIC_FILE_MAX_BYTES:-209715200}
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-local}
       REMOTE_ACCESS_PROVIDER: ${REMOTE_ACCESS_PROVIDER:-auto}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { extname, resolve as resolvePath, sep } from "node:path";
 import { loadConfig, saveConfig, validateConfig, buildStructure, wipeStructure, rebuildStructure } from "../structureManager.js";
-import { getQueue, peekQueue } from "../music/queue.js";
+import { getQueue, peekQueue, volumePercentToRatio } from "../music/queue.js";
 import { resolveInput } from "../music/source.js";
 import {
   getPlaylistSaveStatus,
@@ -20,6 +20,7 @@ import {
   logAuditAction,
 } from "../db.js";
 import { RemoteAccess, isLocalRequest } from "./remoteAccess.js";
+import { registerRemoteAccess, unregisterRemoteAccess } from "./remoteAccessRegistry.js";
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const PUBLIC_ROOT = resolvePath(PUBLIC_DIR.pathname.replace(/^\/([A-Za-z]:)/, "$1"));
@@ -418,7 +419,10 @@ async function handleMusic(req, parts, client, auth, mutateHeaders) {
     return json({ ok: true, job }, { status: job.alreadyRunning ? 200 : 202 });
   } else if (action === "volume") {
     const { level } = await readJson(req);
-    queue.setVolume(Math.max(0, Math.min(2, Number(level) / 100)));
+    const ratio = volumePercentToRatio(level);
+    if (ratio === null) return json({ error: "Громкость должна быть числом от 0 до 200" }, { status: 400 });
+    const appliedVolume = queue.setVolume(ratio);
+    return json({ ok: true, volume: appliedVolume });
   } else return null;
   return json({ ok: true });
 }
@@ -665,6 +669,7 @@ function buildSessionContext(req, remoteAuth, headers, forceCreate = false, incl
 
 export function startWebServer(client, port = 8787) {
   const remote = new RemoteAccess({ port });
+  registerRemoteAccess(client, remote);
   let historyCleanupTimer = null;
   const server = Bun.serve({
     hostname: "0.0.0.0",
@@ -769,7 +774,10 @@ export function startWebServer(client, port = 8787) {
   }, 60 * 60_000);
   historyCleanupTimer.unref?.();
   console.log(`[web] Панель управления: http://127.0.0.1:${server.port}`);
-  server.stopRemoteAccess = () => remote.stop({ revokeSessions: false });
+  server.stopRemoteAccess = () => {
+    unregisterRemoteAccess(client, remote);
+    return remote.stop({ revokeSessions: false });
+  };
   server.stopPanel = () => historyCleanupTimer && clearInterval(historyCleanupTimer);
   return server;
 }

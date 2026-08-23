@@ -1,7 +1,8 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from "discord.js";
 import { loadConfig } from "../structureManager.js";
 import { resolveInput } from "../music/source.js";
-import { getQueue, peekQueue } from "../music/queue.js";
+import { resolveAttachment } from "../music/attachment.js";
+import { getQueue, peekQueue, volumePercentToRatio } from "../music/queue.js";
 
 function formatDuration(totalSec) {
   const sec = Math.floor(totalSec || 0);
@@ -31,8 +32,9 @@ async function checkAccess(interaction) {
 const play = {
   data: new SlashCommandBuilder()
     .setName("play")
-    .setDescription("Включить трек или добавить YouTube-плейлист в очередь")
-    .addStringOption((o) => o.setName("query").setDescription("Трек, запрос, ссылка или ID плейлиста").setRequired(true)),
+    .setDescription("Включить YouTube-трек, плейлист или приложенный медиафайл")
+    .addStringOption((o) => o.setName("query").setDescription("Трек, запрос, ссылка или ID плейлиста").setRequired(false))
+    .addAttachmentOption((o) => o.setName("file").setDescription("Аудио или видео; будет воспроизведена звуковая дорожка").setRequired(false)),
   async execute(interaction) {
     if (!(await checkAccess(interaction))) return;
     const voiceChannel = interaction.member.voice?.channel;
@@ -40,12 +42,22 @@ const play = {
       return interaction.reply({ content: "Зайдите в голосовой канал, чтобы включить музыку.", flags: MessageFlags.Ephemeral });
     }
 
+    const query = interaction.options.getString("query");
+    const attachment = interaction.options.getAttachment("file");
+    if (!query && !attachment) {
+      return interaction.reply({ content: "Укажите `query` или приложите `file`.", flags: MessageFlags.Ephemeral });
+    }
+    if (query && attachment) {
+      return interaction.reply({ content: "Укажите только один источник: `query` или `file`.", flags: MessageFlags.Ephemeral });
+    }
+
     await interaction.deferReply();
-    const query = interaction.options.getString("query", true);
 
     let resolved;
     try {
-      resolved = await resolveInput(query, interaction.user.tag);
+      resolved = attachment
+        ? await resolveAttachment(attachment, interaction.user.tag)
+        : await resolveInput(query, interaction.user.tag);
     } catch (err) {
       return interaction.editReply(`Не удалось обработать запрос: ${err.message}`);
     }
@@ -167,8 +179,8 @@ const volume = {
       return interaction.reply({ content: "Бот сейчас не в голосовом канале.", flags: MessageFlags.Ephemeral });
     }
     const level = interaction.options.getInteger("level", true);
-    queue.setVolume(level / 100);
-    await interaction.reply(`🔊 Громкость: ${level}%`);
+    const applied = queue.setVolume(volumePercentToRatio(level));
+    await interaction.reply(`🔊 Громкость на стороне бота: ${Math.round(applied * 100)}%`);
   },
 };
 

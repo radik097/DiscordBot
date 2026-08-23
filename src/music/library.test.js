@@ -41,4 +41,24 @@ describe("saved playlist identities and playback state", () => {
     expect(await clearPlaylistPlaybackState(guildId, "playlist-a")).toBe(true);
     expect((await getSavedPlaylist(guildId, "playlist-a")).playback).toBeNull();
   });
+
+  test("preserves cached Discord attachment identity in a resume snapshot", async () => {
+    const attachment = {
+      url: "https://cdn.discordapp.com/attachments/1/2/clip.mp4",
+      title: "clip.mp4",
+      durationSec: 12,
+      startTimeSec: 4,
+      sourceType: "attachment",
+      cacheFile: `upload-${"c".repeat(64)}.mp4`,
+      sizeBytes: 1234,
+      contentType: "video/mp4",
+    };
+    expect(await savePlaylistPlaybackState(guildId, "playlist-a", [attachment])).toBe(true);
+    expect((await getSavedPlaylist(guildId, "playlist-a")).playback.tracks[0]).toMatchObject({
+      sourceType: "attachment",
+      cacheFile: attachment.cacheFile,
+      sizeBytes: 1234,
+      contentType: "video/mp4",
+    });
+  });
 });

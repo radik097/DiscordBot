@@ -17,7 +17,8 @@ const YTDLP_PATH = (() => {
   return "yt-dlp";
 })();
 
-const CACHE_DIR = fileURLToPath(new URL("../../data/cache/audio/", import.meta.url));
+export const AUDIO_CACHE_DIR = fileURLToPath(new URL("../../data/cache/audio/", import.meta.url));
+const CACHE_DIR = AUDIO_CACHE_DIR;
 await mkdir(CACHE_DIR, { recursive: true });
 const MAX_PLAYLIST_TRACKS = 500;
 const cacheDownloads = new Map();
@@ -282,6 +283,10 @@ async function pruneCache() {
   if (removed) console.log(`[cache] Очистка кэша: удалено ${removed} файлов, размер теперь ${Math.round(totalBytes / 1024 / 1024)} MB`);
 }
 
+export async function pruneAudioCache() {
+  return pruneCache();
+}
+
 async function findCachedFile(key) {
   const prefix = `${key}.`;
   const entries = await readdir(CACHE_DIR);
@@ -408,12 +413,39 @@ export async function getAudioCacheStats() {
   return { files: entries.length, totalMB: Number(formatMB(totalBytes)) };
 }
 
-export async function getAudioStream(url, quality = "best", startTimeSec = 0) {
+async function resolveAttachmentCacheFile(cacheFile) {
+  const fileName = String(cacheFile ?? "");
+  if (path.basename(fileName) !== fileName || !/^upload-[a-f0-9]{64}\.[a-z0-9]{1,10}$/.test(fileName)) {
+    throw new Error("Некорректное имя кэшированного Discord-файла");
+  }
+  const file = path.join(CACHE_DIR, fileName);
+  const info = await stat(file).catch(() => null);
+  if (!info?.isFile() || info.size <= 0) throw new Error("Кэшированный Discord-файл отсутствует");
+  return file;
+}
+
+export async function getAttachmentCacheEntry(cacheFile) {
+  const file = await resolveAttachmentCacheFile(cacheFile);
+  const info = await stat(file);
+  return { file, fileName: path.basename(file), bytes: info.size, quality: "file" };
+}
+
+export async function getAudioStream(source, quality = "best", startTimeSec = 0) {
   let localFile;
-  try {
-    localFile = await ensureCachedFile(url, quality);
-  } catch (err) {
-    throw new Error(`Не удалось скачать/закэшировать трек: ${err.message}`);
+  if (source && typeof source === "object" && source.sourceType === "attachment") {
+    try {
+      localFile = await resolveAttachmentCacheFile(source.cacheFile);
+      quality = "file";
+    } catch (err) {
+      throw new Error(`Не удалось открыть Discord-файл: ${err.message}`);
+    }
+  } else {
+    const url = typeof source === "string" ? source : source?.url;
+    try {
+      localFile = await ensureCachedFile(url, quality);
+    } catch (err) {
+      throw new Error(`Не удалось скачать/закэшировать трек: ${err.message}`);
+    }
   }
 
   return new Promise((resolve, reject) => {

@@ -30,7 +30,7 @@ window.matchMedia("(max-width: 720px)").addEventListener("change", updateMobileQ
 const phoneDialog = document.getElementById("phoneDialog");
 const phoneButton = document.getElementById("phoneConnectBtn");
 const isLocalPanel = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
-if (!isLocalPanel) phoneButton.hidden = true;
+if (!isLocalPanel && !window.DISCORD_BOT_DEMO) phoneButton.hidden = true;
 
 function renderPhoneAccess(data) {
   const qr = document.getElementById("phoneQr");
@@ -619,21 +619,61 @@ async function loadMusic() {
 
 async function musicAction(action, body) {
   try {
-    await api(`/api/music/${state.guildId}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : "{}" });
+    const result = await api(`/api/music/${state.guildId}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : "{}" });
+    return result;
   } catch (err) {
     document.getElementById("musicError").textContent = "Ошибка: " + err.message;
+    return null;
+  } finally {
+    if (action !== "volume") void loadMusic();
   }
-  loadMusic();
 }
 
 document.getElementById("musicPause").addEventListener("click", () => musicAction("pause"));
 document.getElementById("musicResume").addEventListener("click", () => musicAction("resume"));
 document.getElementById("musicSkip").addEventListener("click", () => musicAction("skip"));
 document.getElementById("musicStop").addEventListener("click", () => musicAction("stop"));
-document.getElementById("musicVolume").addEventListener("change", (e) => {
-  document.getElementById("musicVolumeLabel").textContent = `${e.target.value}%`;
-  musicAction("volume", { level: Number(e.target.value) });
-});
+
+const volumeControl = document.getElementById("musicVolume");
+let volumeDebounceTimer = null;
+let pendingHostVolume = null;
+let volumeRequestRunning = false;
+
+async function flushHostVolume() {
+  if (volumeRequestRunning) return;
+  volumeRequestRunning = true;
+  try {
+    while (pendingHostVolume !== null) {
+      const requestedLevel = pendingHostVolume;
+      pendingHostVolume = null;
+      const result = await musicAction("volume", { level: requestedLevel });
+      if (!result) continue;
+      const appliedLevel = Math.round((Number(result.volume) || 0) * 100);
+      if (pendingHostVolume === null) {
+        volumeControl.value = appliedLevel;
+        document.getElementById("musicVolumeLabel").textContent = `${appliedLevel}%`;
+        document.getElementById("musicError").textContent = `🔊 Громкость бота применена: ${appliedLevel}%`;
+      }
+    }
+  } finally {
+    volumeRequestRunning = false;
+  }
+}
+
+function queueHostVolume(level, immediate = false) {
+  pendingHostVolume = Math.max(0, Math.min(200, Number(level) || 0));
+  document.getElementById("musicVolumeLabel").textContent = `${pendingHostVolume}%`;
+  if (volumeDebounceTimer) clearTimeout(volumeDebounceTimer);
+  volumeDebounceTimer = null;
+  if (immediate) void flushHostVolume();
+  else volumeDebounceTimer = setTimeout(() => {
+    volumeDebounceTimer = null;
+    void flushHostVolume();
+  }, 160);
+}
+
+volumeControl.addEventListener("input", (event) => queueHostVolume(event.target.value));
+volumeControl.addEventListener("change", (event) => queueHostVolume(event.target.value, true));
 
 document.getElementById("musicQueue").addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-queue-id]");

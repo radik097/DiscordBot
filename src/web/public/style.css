@@ -68,6 +68,19 @@ header h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: 0.1px;
 
 .statusbar { display: flex; gap: 14px; align-items: center; color: var(--md-on-surface-muted); font-size: 13px; }
 
+.demo-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 1px solid rgba(156, 238, 187, 0.25);
+  border-radius: var(--r-pill);
+  color: var(--md-success);
+  background: rgba(32, 121, 76, 0.18);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .panel-menu { position: relative; }
 .panel-menu-list {
   display: none;
