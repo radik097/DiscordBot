@@ -126,9 +126,15 @@ BOT_CPU_LIMIT=3.0
 ```
 
 В Cloudflare Tunnel публичный hostname должен направляться на внутренний адрес
-`http://discord-bot:8787`. Порт панели на публичном интерфейсе VPS открывать не
-нужно. Первичный QR создаётся из панели, открытой через SSH port forwarding на
-`http://127.0.0.1:8787`; последующие мобильные сессии сохраняются в SQLite.
+`http://discord-bot:8787` только в standalone-режиме. Для `/get-url`, Cloudflare
+OTP и постоянных email-аккаунтов используется защищённая схема через DockerHub
+gateway: tunnel направляется на `http://gateway:4180`, а gateway проверяет
+Cloudflare JWT и подписывает подтверждённую почту для DiscordBot. Порт панели на
+публичном интерфейсе открывать не нужно.
+
+Подробная пошаговая настройка named tunnel, published hostname, One-time PIN,
+Access application, gateway и `.env`:
+**[Cloudflare Zero Trust Tunnel](docs/cloudflare-zero-trust-tunnel.md)**.
 
 ### `config/structure.json`
 Не коммитится в репозиторий (см. `.gitignore`) — это конфигурация конкретного
