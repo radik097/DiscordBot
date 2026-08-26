@@ -94,7 +94,12 @@ describe("web email access integration", () => {
     const path = `${inviteUrl.pathname}${inviteUrl.search}`;
     const setup = await fetch(`${base}${path}`, { headers: identityHeaders(path, "member@example.com"), redirect: "manual" });
     expect(setup.status).toBe(200);
-    expect(await setup.text()).toContain("Создание постоянного доступа");
+    const setupHtml = await setup.text();
+    expect(setupHtml).toContain("Создание постоянного доступа");
+    expect(setupHtml).toContain('data-password-toggle="newPassword,newPasswordConfirm"');
+    expect(setupHtml).toContain('autocomplete="username" readonly');
+    expect(setupHtml).toContain("Сохранить пароль в браузере");
+    expect(setupHtml).toContain('src="/access-auth.js"');
 
     const formPath = "/access/invite";
     const activated = await fetch(`${base}${formPath}`, {
@@ -121,5 +126,30 @@ describe("web email access integration", () => {
     });
     expect(login.status).toBe(303);
     expect(cookieFrom(login)).toContain("discordbot_access_session=");
+  });
+
+  test("offers password visibility before submitting the login form", async () => {
+    const login = await fetch(`${base}/login`, {
+      headers: {
+        host: "discord.example.com",
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-host": "discord.example.com",
+        "x-forwarded-proto": "https",
+      },
+      redirect: "manual",
+    });
+    expect(login.status).toBe(200);
+    const html = await login.text();
+    expect(html).toContain('id="loginPassword"');
+    expect(html).toContain('data-password-toggle="loginPassword"');
+    expect(html).toContain("Показать пароль");
+    expect(html).toContain("Сохранить пароль в браузере");
+
+    const script = await fetch(`${base}/access-auth.js`);
+    expect(script.status).toBe(200);
+    expect(script.headers.get("content-type")).toContain("javascript");
+    const scriptText = await script.text();
+    expect(scriptText).toContain('input.type = show ? "text" : "password"');
+    expect(scriptText).toContain("new PasswordCredential");
   });
 });

@@ -241,8 +241,8 @@ function pairingPage(pairToken, valid = true) {
 
 function accessPage({ title, content, status = 200 }) {
   return new Response(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>
-    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:20px;background:#0f1117;color:#f4f6fb;font:16px/1.5 system-ui,sans-serif}.card{width:min(100%,460px);padding:28px;border:1px solid #343947;border-radius:20px;background:#1b1f2a;box-shadow:0 18px 50px #0008}h1{margin:0 0 12px;font-size:1.55rem}p{color:#d8dbea}form{display:grid;gap:14px;margin-top:22px}label{display:grid;gap:7px;color:#d8dbea}input{width:100%;min-height:48px;border:1px solid #444b5d;border-radius:11px;background:#11141c;color:white;padding:10px 12px;font:inherit}button,.button{display:grid;place-items:center;width:100%;min-height:50px;border:0;border-radius:12px;background:#5865f2;color:white;font:700 1rem system-ui;text-decoration:none;cursor:pointer}.muted{color:#aeb4c3;font-size:.9rem}.error{color:#ff9a9a}
-  </style></head><body><main class="card"><h1>${escapeHtml(title)}</h1>${content}</main></body></html>`, {
+    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:20px;background:#0f1117;color:#f4f6fb;font:16px/1.5 system-ui,sans-serif}.card{width:min(100%,460px);padding:28px;border:1px solid #343947;border-radius:20px;background:#1b1f2a;box-shadow:0 18px 50px #0008}h1{margin:0 0 12px;font-size:1.55rem}p{color:#d8dbea}form{display:grid;gap:14px;margin-top:22px}label{display:grid;gap:7px;color:#d8dbea}input{width:100%;min-height:48px;border:1px solid #444b5d;border-radius:11px;background:#11141c;color:white;padding:10px 12px;font:inherit}button,.button{display:grid;place-items:center;width:100%;min-height:50px;border:0;border-radius:12px;background:#5865f2;color:white;font:700 1rem system-ui;text-decoration:none;cursor:pointer}.password-toggle{min-height:42px;background:#30364a;font-weight:650}.save-password{display:grid;grid-template-columns:22px 1fr;align-items:center;gap:10px;font-size:.94rem}.save-password input{width:20px;min-height:20px;margin:0;accent-color:#5865f2}.muted{color:#aeb4c3;font-size:.9rem}.error{color:#ff9a9a}
+  </style><script src="/access-auth.js" defer></script></head><body><main class="card"><h1>${escapeHtml(title)}</h1>${content}</main></body></html>`, {
     status,
     headers: { "content-type": "text/html; charset=utf-8", ...buildSecurityHeaders() },
   });
@@ -253,9 +253,11 @@ function loginPage(error = "") {
     title: "Вход в DiscordBot",
     content: `${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
       <p>Постоянные пользователи входят по электронной почте и паролю. Для суточного доступа используйте персональную ссылку из Discord.</p>
-      <form method="post" action="/login">
-        <label>Электронная почта<input name="email" type="email" autocomplete="username" required maxlength="254"></label>
-        <label>Пароль<input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="128"></label>
+      <form method="post" action="/login" data-password-form>
+        <label>Электронная почта<input id="loginEmail" name="email" type="email" autocomplete="username" required maxlength="254"></label>
+        <label>Пароль<input id="loginPassword" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="128"></label>
+        <button class="password-toggle" type="button" data-password-toggle="loginPassword" data-show-label="Показать пароль" data-hide-label="Скрыть пароль" aria-pressed="false">Показать пароль</button>
+        <label class="save-password"><input type="checkbox" data-save-password checked>Сохранить пароль в браузере</label>
         <button type="submit">Войти</button>
       </form>`,
   });
@@ -266,10 +268,13 @@ function permanentSetupPage(rawToken, email, error = "") {
     title: "Создание постоянного доступа",
     content: `${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
       <p>Почта <strong>${escapeHtml(email)}</strong> подтверждена. Создайте пароль для последующих входов.</p>
-      <form method="post" action="/access/invite">
+      <form method="post" action="/access/invite" data-password-form>
         <input name="token" type="hidden" value="${escapeHtml(rawToken)}">
-        <label>Новый пароль<input name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
-        <label>Повторите пароль<input name="passwordConfirm" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
+        <label>Электронная почта<input id="setupEmail" name="username" type="email" autocomplete="username" readonly value="${escapeHtml(email)}"></label>
+        <label>Новый пароль<input id="newPassword" name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
+        <label>Повторите пароль<input id="newPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
+        <button class="password-toggle" type="button" data-password-toggle="newPassword,newPasswordConfirm" data-show-label="Показать пароли" data-hide-label="Скрыть пароли" aria-pressed="false">Показать пароли</button>
+        <label class="save-password"><input type="checkbox" data-save-password checked>Сохранить пароль в браузере</label>
         <button type="submit">Создать доступ</button>
       </form>
       <p class="muted">Аккаунт остаётся действующим, пока владелец его не отзовёт. Отдельная браузерная сессия обновляется входом по паролю.</p>`,

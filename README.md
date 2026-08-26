@@ -1,6 +1,6 @@
 # 🤖 Discord Bot
 
-Текущая версия: **1.10.1**. Подробное описание изменений — в
+Текущая версия: **1.10.2**. Подробное описание изменений — в
 [CHANGELOG.md](CHANGELOG.md).
 
 Discord-бот на discord.js/Bun: управление структурой сервера (роли, каналы, права),
@@ -150,7 +150,7 @@ Discord-сервера. Шаблон лежит в `config/structure.example.jso
 
 ### Docker
 ```bash
-docker compose up -d --build               # собрать/запустить 1.10.1
+docker compose up -d --build               # собрать/запустить 1.10.2
 docker compose --profile pot up -d --build # запустить вместе с PO Token Provider
 docker compose --profile server --profile pot up -d --build # VPS + Cloudflare
 docker compose down          # остановить и удалить контейнер
