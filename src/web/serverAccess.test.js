@@ -102,12 +102,29 @@ describe("web email access integration", () => {
     expect(setupHtml).toContain('src="/access-auth.js"');
 
     const formPath = "/access/invite";
+    const rejected = await fetch(`${base}${formPath}`, {
+      method: "POST",
+      headers: {
+        ...identityHeaders(formPath, "member@example.com", "POST"),
+        "content-type": "application/x-www-form-urlencoded",
+        origin: "https://attacker.example.com",
+      },
+      body: new URLSearchParams({
+        token: inviteUrl.searchParams.get("token"),
+        password: "a secure password",
+        passwordConfirm: "a secure password",
+      }),
+      redirect: "manual",
+    });
+    expect(rejected.status).toBe(403);
+    expect(await rejected.text()).toContain("Запрос отклонён");
+
     const activated = await fetch(`${base}${formPath}`, {
       method: "POST",
       headers: {
         ...identityHeaders(formPath, "member@example.com", "POST"),
         "content-type": "application/x-www-form-urlencoded",
-        origin: base,
+        origin: "https://discord.example.com",
       },
       body: new URLSearchParams({
         token: inviteUrl.searchParams.get("token"),
@@ -120,7 +137,7 @@ describe("web email access integration", () => {
 
     const login = await fetch(`${base}/login`, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", origin: base },
+      headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://discord.example.com" },
       body: new URLSearchParams({ email: "member@example.com", password: "a secure password" }),
       redirect: "manual",
     });

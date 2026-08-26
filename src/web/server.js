@@ -297,11 +297,13 @@ async function readForm(req, maxBytes = 16 * 1024) {
   return new URLSearchParams(text);
 }
 
-function validSameOrigin(req) {
+function validSameOrigin(req, publicBaseUrl = "") {
   const origin = req.headers.get("origin");
   if (!origin) return true;
   try {
-    return new URL(origin).host === new URL(req.url).host;
+    const suppliedOrigin = new URL(origin).origin;
+    if (suppliedOrigin === new URL(req.url).origin) return true;
+    return Boolean(publicBaseUrl) && suppliedOrigin === new URL(publicBaseUrl).origin;
   } catch {
     return false;
   }
@@ -888,7 +890,7 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
             });
           }
           if (req.method === "POST") {
-            if (!validSameOrigin(req)) return accessDeniedPage("Запрос отклонён.", 403);
+            if (!validSameOrigin(req, access.publicBaseUrl)) return accessDeniedPage("Запрос отклонён.", 403);
             const form = await readForm(req);
             if (!form) return accessDeniedPage("Форма слишком большая.", 413);
             const rawToken = form.get("token") || "";
@@ -920,7 +922,7 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
             return loginPage();
           }
           if (req.method === "POST") {
-            if (!validSameOrigin(req)) return loginPage("Запрос отклонён.");
+            if (!validSameOrigin(req, access.publicBaseUrl)) return loginPage("Запрос отклонён.");
             const form = await readForm(req);
             if (!form) return accessDeniedPage("Форма слишком большая.", 413);
             const email = String(form.get("email") || "").trim().toLowerCase();
