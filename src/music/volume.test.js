@@ -26,11 +26,11 @@ describe("host-side music volume", () => {
     expect(getDefaultMusicVolumeRatio({ MUSIC_DEFAULT_VOLUME_PERCENT: "invalid" })).toBe(1);
   });
 
-  test("applies the new level to the active inline volume transformer", () => {
+  test("applies the new level to the active PCM volume transformer", () => {
     const queue = getQueue(`volume-test-${Date.now()}`);
     queues.push(queue);
     let applied = null;
-    queue.currentResource = { volume: { setVolume: (value) => { applied = value; } } };
+    queue.currentVolumeTransformer = { setVolume: (value) => { applied = value; } };
 
     expect(queue.setVolume(0)).toBe(0);
     expect(queue.volume).toBe(0);

@@ -9,6 +9,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { getAudioStream } from "./source.js";
 import { saveQueueState, loadQueueState } from "./persistence.js";
+import { PcmVolumeTransformer } from "./pcmVolume.js";
 
 const IDLE_LEAVE_MS = 5 * 60 * 1000;
 const MAX_QUEUE_SIZE = 500;
@@ -59,6 +60,7 @@ class GuildQueue {
     this.idleTimer = null;
     this.currentProcess = null;
     this.currentResource = null;
+    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     this.playbackOffsetSec = 0;
@@ -159,6 +161,7 @@ class GuildQueue {
     this.playGeneration += 1;
     this.killCurrentProcess();
     this.currentResource = null;
+    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.playbackOffsetSec = 0;
     this.player.stop(true);
@@ -350,6 +353,7 @@ class GuildQueue {
     const generation = ++this.playGeneration;
     this.killCurrentProcess();
     this.currentResource = null;
+    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     const next = this.tracks.shift();
@@ -376,12 +380,13 @@ class GuildQueue {
       this.currentProcess = child;
       this.currentQuality = quality;
       console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}" с ${this.playbackOffsetSec.toFixed(1)}с, quality=${quality}, type=${type}`);
-      const resource = createAudioResource(stream, {
+      const volumeTransformer = new PcmVolumeTransformer(this.volume);
+      stream.pipe(volumeTransformer);
+      const resource = createAudioResource(volumeTransformer, {
         inputType: type,
-        inlineVolume: true,
         metadata: { queueId: next.queueId, generation },
       });
-      resource.volume?.setVolume(this.volume);
+      this.currentVolumeTransformer = volumeTransformer;
       this.currentResource = resource;
       this.player.play(resource);
       this.startStatsLogging(stats);
@@ -441,7 +446,7 @@ class GuildQueue {
     const normalized = normalizeVolumeRatio(v);
     if (normalized === null) throw new TypeError("Громкость должна быть конечным числом от 0 до 2");
     this.volume = normalized;
-    this.currentResource?.volume?.setVolume(normalized);
+    this.currentVolumeTransformer?.setVolume(normalized);
     scheduleQueueSave();
     return normalized;
   }
@@ -456,6 +461,7 @@ class GuildQueue {
     this.tracks = [];
     this.playing = null;
     this.currentResource = null;
+    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     this.playbackOffsetSec = 0;
