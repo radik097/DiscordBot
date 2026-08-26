@@ -10,7 +10,18 @@ const state = {
   activePlaylistId: null,
   mobileQueueLimit: 20,
   csrfToken: null,
+  stagingMode: false,
 };
+
+function applyStagingMode(enabled) {
+  state.stagingMode = Boolean(enabled);
+  for (const panelName of ["music", "playlists", "voice"]) {
+    const panel = document.querySelector(`[data-panel="${panelName}"]`);
+    const mobileButton = document.querySelector(`[data-mobile-panel="${panelName}"]`);
+    if (panel) panel.hidden = state.stagingMode;
+    if (mobileButton) mobileButton.hidden = state.stagingMode;
+  }
+}
 
 function updateMobileQueueWindow() {
   const items = [...document.querySelectorAll("#musicQueue > li")];
@@ -172,6 +183,114 @@ async function api(path, opts) {
   return data;
 }
 
+const accessAdminButton = document.getElementById("accessAdminBtn");
+const accessAdminDialog = document.getElementById("accessAdminDialog");
+
+function accessKindLabel(kind) {
+  return kind === "owner" ? "владелец" : kind === "day" ? "доступ на 24 часа" : kind === "permanent" ? "постоянный аккаунт" : kind;
+}
+
+async function loadAccessIdentity() {
+  const me = await api("/api/access/me");
+  const label = document.getElementById("accessIdentity");
+  label.textContent = me.email
+    ? `🔐 ${me.email} · ${accessKindLabel(me.kind)}`
+    : "🔒 вход не выполнен";
+  label.title = me.expiresAt ? `Сессия до ${fmtTime(me.expiresAt)}` : "";
+  accessAdminButton.hidden = !me.owner;
+  phoneButton.hidden = !me.owner || (!isLocalPanel && !window.DISCORD_BOT_DEMO);
+  return me;
+}
+
+function renderAccessRows(container, rows, type) {
+  container.innerHTML = "";
+  if (!rows.length) {
+    const empty = document.createElement("span");
+    empty.className = "hint";
+    empty.textContent = type === "account" ? "Нет постоянных аккаунтов." : "Нет активных сессий.";
+    container.appendChild(empty);
+    return;
+  }
+  for (const item of rows) {
+    const row = document.createElement("div");
+    row.className = "phone-device";
+    const details = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = item.email;
+    const meta = document.createElement("span");
+    meta.textContent = type === "account"
+      ? `Создан ${fmtTime(item.createdAt)}${item.revokedAt ? ` · отозван ${fmtTime(item.revokedAt)}` : ""}`
+      : `${accessKindLabel(item.kind)} · ${item.device} · активно ${fmtTime(item.lastSeenAt)} · до ${fmtTime(item.expiresAt)}`;
+    details.append(title, meta);
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.className = "danger phone-device-revoke";
+    revoke.dataset.accessType = type;
+    revoke.dataset.accessId = item.id;
+    revoke.textContent = "Отозвать";
+    if (type === "account" && item.revokedAt) revoke.disabled = true;
+    row.append(details, revoke);
+    container.appendChild(row);
+  }
+}
+
+async function loadAccessAdmin() {
+  const data = await api("/api/access/admin");
+  renderAccessRows(document.getElementById("accessAccounts"), data.accounts || [], "account");
+  renderAccessRows(document.getElementById("accessSessions"), data.sessions || [], "session");
+}
+
+accessAdminButton.addEventListener("click", async () => {
+  accessAdminDialog.showModal();
+  document.getElementById("accessAdminError").textContent = "";
+  try { await loadAccessAdmin(); }
+  catch (error) { document.getElementById("accessAdminError").textContent = error.message; }
+});
+
+document.getElementById("accessInvitePermanent").addEventListener("click", async () => {
+  const error = document.getElementById("accessAdminError");
+  const result = document.getElementById("accessInviteResult");
+  error.textContent = "";
+  result.hidden = true;
+  try {
+    const email = document.getElementById("accessInviteEmail").value.trim();
+    const invite = await api("/api/access/admin/invites", { method: "POST", body: JSON.stringify({ email, kind: "permanent" }) });
+    result.innerHTML = "";
+    const text = document.createElement("strong");
+    text.textContent = `Ссылка для ${invite.email} (до ${fmtTime(invite.expiresAt)}):`;
+    const link = document.createElement("a");
+    link.className = "access-link";
+    link.href = invite.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = invite.url;
+    result.append(text, link);
+    result.hidden = false;
+    await loadAccessAdmin();
+  } catch (err) { error.textContent = err.message; }
+});
+
+accessAdminDialog.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-access-id]");
+  if (!button) return;
+  button.disabled = true;
+  const error = document.getElementById("accessAdminError");
+  try {
+    const resource = button.dataset.accessType === "account" ? "accounts" : "sessions";
+    await api(`/api/access/admin/${resource}/${encodeURIComponent(button.dataset.accessId)}`, { method: "DELETE" });
+    await loadAccessAdmin();
+    error.textContent = "Доступ отозван.";
+  } catch (err) {
+    error.textContent = err.message;
+    button.disabled = false;
+  }
+});
+
+document.getElementById("accessLogoutBtn").addEventListener("click", async () => {
+  try { await api("/api/access/logout", { method: "POST", body: "{}" }); } catch {}
+  location.assign("/login");
+});
+
 function fmtDuration(sec) {
   sec = Math.floor(sec || 0);
   const h = Math.floor(sec / 3600);
@@ -190,6 +309,7 @@ function fmtTime(ts) {
 
 async function loadStatus() {
   const status = await api("/api/status");
+  applyStagingMode(status.stagingMode);
   document.getElementById("botTag").textContent = status.ready && status.tag ? `🟢 ${status.tag}` : "🔴 не в сети";
   document.getElementById("uptime").textContent = `аптайм: ${Math.floor(status.uptimeSec / 60)} мин`;
 
@@ -1043,6 +1163,7 @@ async function loadStats() {
 
 (async function boot() {
   try {
+    await loadAccessIdentity();
     await loadStatus();
     await settleTasks(
       [loadConfigEditor(), loadMusic(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()],

@@ -12,7 +12,10 @@
   <div class="statusbar">
     <span id="botTag">—</span>
     <span id="uptime"></span>
+    <span id="accessIdentity" class="access-identity">Проверка доступа…</span>
     <select id="guildSelect"></select>
+    <button id="accessAdminBtn" class="phone-connect" hidden>🔐 Доступ</button>
+    <button id="accessLogoutBtn" title="Завершить текущую веб-сессию">Выйти</button>
     <button id="phoneConnectBtn" class="phone-connect">📱 Подключить телефон</button>
     <div class="panel-menu">
       <button id="panelMenuBtn" title="Показать скрытые панели">☰ Панели</button>
@@ -317,6 +320,30 @@
       <button id="phoneStart" type="button" class="primary">Создать QR-код</button>
       <button value="cancel">Закрыть</button>
     </div>
+  </form>
+</dialog>
+
+<dialog id="accessAdminDialog" class="playlist-dialog access-dialog">
+  <form method="dialog">
+    <div>
+      <h2>🔐 Управление веб-доступом</h2>
+      <p class="hint">Суточные ссылки выдаёт команда <code>/get-url email</code>. Здесь владелец создаёт постоянные аккаунты и отзывает доступ.</p>
+    </div>
+    <section class="access-create">
+      <label>Электронная почта<input id="accessInviteEmail" type="email" maxlength="254" placeholder="person@example.com"></label>
+      <button id="accessInvitePermanent" type="button" class="primary">Выдать постоянный доступ</button>
+    </section>
+    <div id="accessInviteResult" class="card" hidden></div>
+    <div id="accessAdminError" class="errors"></div>
+    <section>
+      <h3>Постоянные аккаунты</h3>
+      <div id="accessAccounts" class="phone-devices-list"><span class="hint">Нет аккаунтов.</span></div>
+    </section>
+    <section>
+      <h3>Активные сессии</h3>
+      <div id="accessSessions" class="phone-devices-list"><span class="hint">Нет активных сессий.</span></div>
+    </section>
+    <div class="dialog-actions"><button value="cancel">Закрыть</button></div>
   </form>
 </dialog>
 

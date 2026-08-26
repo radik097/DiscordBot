@@ -1,0 +1,15 @@
+services:
+  discord-bot:
+    image: discord-bot:1.10.0
+    build:
+      context: D:/DiscordBot-access-staging
+      dockerfile: Dockerfile
+    environment:
+      ACCESS_PUBLIC_BASE_URL: https://discord.llmtechspec.xyz
+      ACCESS_OWNER_EMAIL: rodionaustralia@gmail.com
+      ACCESS_OWNER_PRIORITY_MS: 300000
+      PROJECT_IDENTITY_SECRET: ${PROJECT_IDENTITY_SECRET:?PROJECT_IDENTITY_SECRET is required}
+    volumes:
+      - C:/Users/descr/Documents/ChatGPT/Windows/DiscordBot/config:/app/config
+      - C:/Users/descr/Documents/ChatGPT/Windows/DiscordBot/data:/app/data
+      - C:/Users/descr/Documents/ChatGPT/Windows/DiscordBot/logs:/app/logs

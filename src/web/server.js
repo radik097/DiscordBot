@@ -21,6 +21,8 @@ import {
 } from "../db.js";
 import { RemoteAccess, isLocalRequest } from "./remoteAccess.js";
 import { registerRemoteAccess, unregisterRemoteAccess } from "./remoteAccessRegistry.js";
+import { AccessControl, verifyTrustedIdentity } from "./accessControl.js";
+import { registerAccessControl, unregisterAccessControl } from "./accessControlRegistry.js";
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const PUBLIC_ROOT = resolvePath(PUBLIC_DIR.pathname.replace(/^\/([A-Za-z]:)/, "$1"));
@@ -30,6 +32,7 @@ const PANEL_SESSION_COOKIE = "discordbot_panel_session";
 const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MUTATE_MAX = 120;
 const RATE_LIMIT_PAIR_MAX = 15;
+const RATE_LIMIT_LOGIN_MAX = 10;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -174,12 +177,25 @@ function buildSecurityHeaders(headers = {}) {
   };
 }
 
-function enforceMutationSecurity(req, context, pathname, headers) {
+function enforceMutationSecurity(req, context, pathname, headers, access) {
   if (!isUnsafeMethod(req.method)) return null;
   if (!context) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
   if (!matchRbac(req.method, pathname, context)) return notAllowed("Недостаточно прав");
   if (!requireCsrf(req, context)) return json({ error: "CSRF-токен отсутствует или недействителен" }, { status: 403, headers: Object.fromEntries(headers) });
   if (!withRateLimitForMutate(req, context)) return json({ error: "Превышен лимит mutating-запросов" }, { status: 429, headers: Object.fromEntries(headers) });
+  if (pathname === "/api/access/logout") return null;
+  if (access && context.accessSession) {
+    const decision = access.authorizeMutation(context.accessSession);
+    if (!decision.allowed) {
+      if (decision.retryAfterMs) headers.set("retry-after", String(Math.max(1, Math.ceil(decision.retryAfterMs / 1000))));
+      return json({ error: decision.reason, retryAfterMs: decision.retryAfterMs ?? null }, { status: decision.status || 403, headers: Object.fromEntries(headers) });
+    }
+  } else if (access && context.kind === "owner") {
+    access.noteOwnerMutation();
+  } else if (access && context.kind === "legacy-remote") {
+    const decision = access.authorizeMutation({ kind: "day" });
+    if (!decision.allowed) return json({ error: decision.reason, retryAfterMs: decision.retryAfterMs ?? null }, { status: decision.status || 403, headers: Object.fromEntries(headers) });
+  }
   return null;
 }
 
@@ -221,6 +237,69 @@ function pairingPage(pairToken, valid = true) {
       ...buildSecurityHeaders(),
     },
   });
+}
+
+function accessPage({ title, content, status = 200 }) {
+  return new Response(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>
+    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:20px;background:#0f1117;color:#f4f6fb;font:16px/1.5 system-ui,sans-serif}.card{width:min(100%,460px);padding:28px;border:1px solid #343947;border-radius:20px;background:#1b1f2a;box-shadow:0 18px 50px #0008}h1{margin:0 0 12px;font-size:1.55rem}p{color:#d8dbea}form{display:grid;gap:14px;margin-top:22px}label{display:grid;gap:7px;color:#d8dbea}input{width:100%;min-height:48px;border:1px solid #444b5d;border-radius:11px;background:#11141c;color:white;padding:10px 12px;font:inherit}button,.button{display:grid;place-items:center;width:100%;min-height:50px;border:0;border-radius:12px;background:#5865f2;color:white;font:700 1rem system-ui;text-decoration:none;cursor:pointer}.muted{color:#aeb4c3;font-size:.9rem}.error{color:#ff9a9a}
+  </style></head><body><main class="card"><h1>${escapeHtml(title)}</h1>${content}</main></body></html>`, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8", ...buildSecurityHeaders() },
+  });
+}
+
+function loginPage(error = "") {
+  return accessPage({
+    title: "Вход в DiscordBot",
+    content: `${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+      <p>Постоянные пользователи входят по электронной почте и паролю. Для суточного доступа используйте персональную ссылку из Discord.</p>
+      <form method="post" action="/login">
+        <label>Электронная почта<input name="email" type="email" autocomplete="username" required maxlength="254"></label>
+        <label>Пароль<input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="128"></label>
+        <button type="submit">Войти</button>
+      </form>`,
+  });
+}
+
+function permanentSetupPage(rawToken, email, error = "") {
+  return accessPage({
+    title: "Создание постоянного доступа",
+    content: `${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+      <p>Почта <strong>${escapeHtml(email)}</strong> подтверждена. Создайте пароль для последующих входов.</p>
+      <form method="post" action="/access/invite">
+        <input name="token" type="hidden" value="${escapeHtml(rawToken)}">
+        <label>Новый пароль<input name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
+        <label>Повторите пароль<input name="passwordConfirm" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
+        <button type="submit">Создать доступ</button>
+      </form>
+      <p class="muted">Аккаунт остаётся действующим, пока владелец его не отзовёт. Отдельная браузерная сессия обновляется входом по паролю.</p>`,
+  });
+}
+
+function accessDeniedPage(message, status = 403) {
+  return accessPage({
+    title: status === 401 ? "Требуется подтверждение почты" : "Доступ не выдан",
+    content: `<p class="error">${escapeHtml(message)}</p><a class="button" href="/login">Перейти ко входу</a>`,
+    status,
+  });
+}
+
+async function readForm(req, maxBytes = 16 * 1024) {
+  const declaredLength = Number(req.headers.get("content-length")) || 0;
+  if (declaredLength > maxBytes) return null;
+  const text = await req.text();
+  if (Buffer.byteLength(text, "utf8") > maxBytes) return null;
+  return new URLSearchParams(text);
+}
+
+function validSameOrigin(req) {
+  const origin = req.headers.get("origin");
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === new URL(req.url).host;
+  } catch {
+    return false;
+  }
 }
 
 async function readPairToken(req) {
@@ -603,16 +682,72 @@ async function handleRemoteAccess(req, url, remote) {
   return notFound();
 }
 
-async function handleApi(req, url, client, remote, context) {
+async function handleAccessApi(req, url, access, context) {
+  const headers = buildSecurityHeaders();
+  if (url.pathname === "/api/access/me" && req.method === "GET") {
+    const session = context?.accessSession;
+    return json({
+      authenticated: Boolean(session),
+      email: session?.email ?? null,
+      kind: session?.kind ?? null,
+      expiresAt: session?.expiresAt ?? null,
+      owner: session?.kind === "owner",
+    }, { headers });
+  }
+
+  if (url.pathname === "/api/access/logout" && req.method === "POST") {
+    access.revokeCurrent(req);
+    return json({ ok: true }, { headers: { ...headers, "set-cookie": access.clearCookie(req) } });
+  }
+
+  if (!context?.accessSession || context.accessSession.kind !== "owner") {
+    return json({ error: "Управление доступом разрешено только владельцу" }, { status: 403, headers });
+  }
+
+  if (url.pathname === "/api/access/admin" && req.method === "GET") {
+    return json(access.listAdminState(), { headers });
+  }
+
+  if (url.pathname === "/api/access/admin/invites" && req.method === "POST") {
+    const body = await readJson(req);
+    const kind = body.kind === "day" ? "day" : "permanent";
+    const invite = access.issueInvite(body.email, kind, `owner:${context.accessSession.email}`);
+    return json(invite, { status: 201, headers });
+  }
+
+  const sessionMatch = url.pathname.match(/^\/api\/access\/admin\/sessions\/([A-Za-z0-9_-]+)$/);
+  if (sessionMatch && req.method === "DELETE") {
+    return access.revokeSession(sessionMatch[1])
+      ? json({ ok: true }, { headers })
+      : json({ error: "Сессия уже завершена" }, { status: 404, headers });
+  }
+
+  const accountMatch = url.pathname.match(/^\/api\/access\/admin\/accounts\/([A-Za-z0-9_-]+)$/);
+  if (accountMatch && req.method === "DELETE") {
+    return access.revokeAccount(accountMatch[1])
+      ? json({ ok: true }, { headers })
+      : json({ error: "Аккаунт уже отозван" }, { status: 404, headers });
+  }
+
+  return notFound();
+}
+
+async function handleApi(req, url, client, remote, access, context) {
   const parts = url.pathname.split("/").filter(Boolean);
   const resource = parts[1];
   const headers = new Headers(buildSecurityHeaders());
 
-  const mutatingGuard = enforceMutationSecurity(req, context, url.pathname, headers);
+  const mutatingGuard = enforceMutationSecurity(req, context, url.pathname, headers, access);
   if (mutatingGuard) return mutatingGuard;
 
   if (resource === "status" && req.method === "GET") {
-    return json({ ready: client.isReady(), tag: client.user?.tag ?? null, uptimeSec: Math.floor(process.uptime()), guilds: client.guilds.cache.map(guildSummary) }, { headers: Object.fromEntries(headers) });
+    return json({
+      ready: client.isReady(),
+      tag: client.user?.tag ?? null,
+      uptimeSec: Math.floor(process.uptime()),
+      guilds: client.guilds.cache.map(guildSummary),
+      stagingMode: process.env.ACCESS_STAGING_MODE === "true",
+    }, { headers: Object.fromEntries(headers) });
   }
   if (resource === "config") return (await handleConfig(req, parts)) ?? (await handleConfigAction(req, parts, client, context));
   if (resource === "music") return await handleMusic(req, parts, client, context, headers);
@@ -626,6 +761,7 @@ async function handleApi(req, url, client, remote, context) {
     return json({ token: context.csrf }, { headers: Object.fromEntries(headers) });
   }
   if (resource === "remote-access") return await handleRemoteAccess(req, url, remote);
+  if (resource === "access") return await handleAccessApi(req, url, access, context);
   return null;
 }
 
@@ -635,6 +771,7 @@ function buildContext(req) {
     return {
       sessionId: cookieSession.id ?? randomToken(),
       remote: false,
+      kind: "owner",
       roles: cookieSession.roles ?? [localRole],
       csrf: cookieSession.csrf,
     };
@@ -647,7 +784,17 @@ function withRateLimitForMutate(req, context) {
   return rateLimit(key, RATE_LIMIT_MUTATE_MAX, RATE_LIMIT_WINDOW);
 }
 
-function buildSessionContext(req, remoteAuth, headers, forceCreate = false, includeRemote = false) {
+function buildSessionContext(req, remoteAuth, headers, accessSession = null, forceCreate = false, includeRemote = false) {
+  if (accessSession) {
+    return {
+      sessionId: accessSession.id,
+      remote: accessSession.kind !== "owner",
+      kind: accessSession.kind,
+      roles: ["admin"],
+      csrf: accessSession.csrf,
+      accessSession,
+    };
+  }
   const existing = buildContext(req);
   if (existing) return existing;
   if (!forceCreate && !isLocalRequest(req) && !includeRemote) return null;
@@ -662,14 +809,17 @@ function buildSessionContext(req, remoteAuth, headers, forceCreate = false, incl
   return {
     sessionId: panelSessionId,
     remote: Boolean(includeRemote),
+    kind: includeRemote ? "legacy-remote" : "owner",
     roles: panelSession.roles || [localRole],
     csrf: panelSession.csrf,
   };
 }
 
-export function startWebServer(client, port = 8787) {
+export function startWebServer(client, port = 8787, { accessControl = null, identitySecret = process.env.PROJECT_IDENTITY_SECRET || "" } = {}) {
   const remote = new RemoteAccess({ port });
+  const access = accessControl || new AccessControl({ publicBaseUrl: process.env.ACCESS_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL });
   registerRemoteAccess(client, remote);
+  registerAccessControl(client, access);
   let historyCleanupTimer = null;
   const server = Bun.serve({
     hostname: "0.0.0.0",
@@ -677,6 +827,16 @@ export function startWebServer(client, port = 8787) {
     async fetch(req) {
       const url = new URL(req.url);
       const headers = new Headers(buildSecurityHeaders());
+      const local = isLocalRequest(req);
+      const trustedIdentity = verifyTrustedIdentity(req, identitySecret);
+      let accessSession = access.authenticate(req, { trustedEmail: local ? access.ownerEmail : trustedIdentity?.email });
+      const ownerIdentity = local || trustedIdentity?.email === access.ownerEmail;
+      const sessionEligiblePath = url.pathname === "/" || url.pathname === "/index.html" || url.pathname.startsWith("/api/");
+      if (!accessSession && ownerIdentity && sessionEligiblePath) {
+        const created = access.createOwnerSession(req);
+        accessSession = created.session;
+        headers.set("set-cookie", access.sessionCookie(created.token, created.session.expiresAt, req));
+      }
       if (url.pathname === "/health") {
         return json({
           ready: client.isReady(),
@@ -684,12 +844,12 @@ export function startWebServer(client, port = 8787) {
           guilds: client.isReady() ? client.guilds.cache.size : 0,
           tag: client.user?.tag ?? null,
           startedAt: Date.now(),
+          access: { enabled: true, ownerPriorityMs: access.ownerPriorityMs },
         }, { status: client.isReady() ? 200 : 503, headers: Object.fromEntries(headers) });
       }
 
       const remoteAuth = remote.isAuthenticated(req);
-      const local = isLocalRequest(req);
-      const context = buildSessionContext(req, remoteAuth, headers, local, Boolean(remoteAuth));
+      const context = buildSessionContext(req, remoteAuth, headers, accessSession, local, Boolean(remoteAuth));
       if (context?.rotateCookie) {
         headers.set("set-cookie", remote.sessionCookie(context.rotateCookie, context.expiresAt || Date.now() + 12 * 60 * 60 * 1000));
       }
@@ -699,9 +859,89 @@ export function startWebServer(client, port = 8787) {
       }
 
       try {
+        if (url.pathname === "/access/invite") {
+          if (req.method === "GET") {
+            const rawToken = url.searchParams.get("token") || "";
+            const invite = access.getInvite(rawToken);
+            if (!invite) return accessDeniedPage("Ссылка уже использована, отозвана или истекла.", 401);
+            if (!trustedIdentity?.email) {
+              return accessDeniedPage("Cloudflare не передал подтверждённую почту. Откройте исходную ссылку ещё раз и завершите проверку кода.", 401);
+            }
+            if (trustedIdentity.email !== invite.email) {
+              return accessDeniedPage(`Ссылка выдана для другой электронной почты. Подтверждён адрес ${trustedIdentity.email}.`, 403);
+            }
+            if (invite.kind === "permanent") return permanentSetupPage(rawToken, invite.email);
+            const redeemed = access.redeemDayInvite(rawToken, trustedIdentity.email, req);
+            if (!redeemed) return accessDeniedPage("Ссылка уже использована либо истекла.", 401);
+            return new Response(null, {
+              status: 303,
+              headers: {
+                location: "/",
+                "set-cookie": access.sessionCookie(redeemed.token, redeemed.session.expiresAt, req),
+                ...buildSecurityHeaders(),
+              },
+            });
+          }
+          if (req.method === "POST") {
+            if (!validSameOrigin(req)) return accessDeniedPage("Запрос отклонён.", 403);
+            const form = await readForm(req);
+            if (!form) return accessDeniedPage("Форма слишком большая.", 413);
+            const rawToken = form.get("token") || "";
+            const invite = access.getInvite(rawToken);
+            if (!invite || invite.kind !== "permanent") return accessDeniedPage("Ссылка уже использована либо истекла.", 401);
+            if (!trustedIdentity?.email || trustedIdentity.email !== invite.email) return accessDeniedPage("Подтверждённая почта не совпадает с адресом приглашения.", 403);
+            if (form.get("password") !== form.get("passwordConfirm")) return permanentSetupPage(rawToken, invite.email, "Пароли не совпадают.");
+            try {
+              const activated = access.completePermanentInvite(rawToken, trustedIdentity.email, form.get("password"), req);
+              if (!activated) return accessDeniedPage("Ссылка уже использована либо истекла.", 401);
+              return new Response(null, {
+                status: 303,
+                headers: {
+                  location: "/",
+                  "set-cookie": access.sessionCookie(activated.token, activated.session.expiresAt, req),
+                  ...buildSecurityHeaders(),
+                },
+              });
+            } catch (error) {
+              return permanentSetupPage(rawToken, invite.email, error.message);
+            }
+          }
+          return notFound();
+        }
+
+        if (url.pathname === "/login") {
+          if (req.method === "GET") {
+            if (context) return new Response(null, { status: 303, headers: { location: "/", ...buildSecurityHeaders() } });
+            return loginPage();
+          }
+          if (req.method === "POST") {
+            if (!validSameOrigin(req)) return loginPage("Запрос отклонён.");
+            const form = await readForm(req);
+            if (!form) return accessDeniedPage("Форма слишком большая.", 413);
+            const email = String(form.get("email") || "").trim().toLowerCase();
+            const loginKey = `login:${getClientIp(req)}:${email}`;
+            if (!rateLimit(loginKey, RATE_LIMIT_LOGIN_MAX, 15 * 60_000)) return accessPage({ title: "Слишком много попыток", content: "<p class=\"error\">Повторите вход через 15 минут.</p>", status: 429 });
+            try {
+              const loggedIn = access.login(email, form.get("password"), req);
+              if (!loggedIn) return loginPage("Неверная почта или пароль.");
+              return new Response(null, {
+                status: 303,
+                headers: {
+                  location: "/",
+                  "set-cookie": access.sessionCookie(loggedIn.token, loggedIn.session.expiresAt, req),
+                  ...buildSecurityHeaders(),
+                },
+              });
+            } catch {
+              return loginPage("Неверная почта или пароль.");
+            }
+          }
+          return notFound();
+        }
+
         if (url.pathname.startsWith("/api")) {
           if (!context && !local && !remoteAuth) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
-          const apiResponse = await handleApi(req, url, client, remote, context);
+          const apiResponse = await handleApi(req, url, client, remote, access, context);
           if (apiResponse) {
             if (apiResponse instanceof Response) {
               const next = new Headers(apiResponse.headers);
@@ -735,7 +975,14 @@ export function startWebServer(client, port = 8787) {
 
         const staticResponse = await serveStatic(url.pathname);
         if (url.pathname === "/" || url.pathname === "/index.html") {
+          if (!context && !local && !remoteAuth) return new Response(null, { status: 303, headers: { location: "/login", ...buildSecurityHeaders() } });
           if (context || local || remoteAuth) {
+            if (context?.accessSession) {
+              const merged = new Headers(staticResponse.headers);
+              for (const [k, v] of headers.entries()) merged.append(k, v);
+              merged.set("x-csrf-token", context.csrf);
+              return new Response(staticResponse.body, { status: staticResponse.status, headers: merged });
+            }
             const sessionId = ensurePanelSessionCookie(req, headers, Boolean(remoteAuth));
             const session = panelSessions.get(sessionId);
             if (session) {
@@ -776,6 +1023,8 @@ export function startWebServer(client, port = 8787) {
   console.log(`[web] Панель управления: http://127.0.0.1:${server.port}`);
   server.stopRemoteAccess = () => {
     unregisterRemoteAccess(client, remote);
+    unregisterAccessControl(client);
+    access.close();
     return remote.stop({ revokeSessions: false });
   };
   server.stopPanel = () => historyCleanupTimer && clearInterval(historyCleanupTimer);

@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.9.0
+    image: discord-bot:1.10.0
     container_name: discord-bot
     build:
       context: .
@@ -20,6 +20,10 @@ services:
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-local}
       REMOTE_ACCESS_PROVIDER: ${REMOTE_ACCESS_PROVIDER:-auto}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      ACCESS_PUBLIC_BASE_URL: ${ACCESS_PUBLIC_BASE_URL:-}
+      ACCESS_OWNER_EMAIL: ${ACCESS_OWNER_EMAIL:-rodionaustralia@gmail.com}
+      ACCESS_OWNER_PRIORITY_MS: ${ACCESS_OWNER_PRIORITY_MS:-300000}
+      PROJECT_IDENTITY_SECRET: ${PROJECT_IDENTITY_SECRET:-}
       COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
       NGROK_DOMAIN: ${NGROK_DOMAIN:-}
