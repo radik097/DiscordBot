@@ -226,7 +226,7 @@ curl.exe -I https://discord.example.com/health
 | Tunnel `Down` | Валидность `TUNNEL_TOKEN`, исходящий порт `7844`, логи `private-docker-hub-cloudflared`. |
 | OTP не приходит | Email должен совпадать с Access policy; новый PIN отменяет предыдущий; проверьте письма от `noreply@notify.cloudflare.com`. |
 | «Подтверждённая почта не совпадает» | В Cloudflare Access выполнен вход под другим email, чем указан в `/get-url`. |
-| «Запрос отклонён» после пароля | `ACCESS_PUBLIC_BASE_URL` должен точно совпадать с публичным origin; требуется DiscordBot `1.10.3` или новее. |
+| «Запрос отклонён» после пароля | Перезагрузите исходную ссылку после обновления до DiscordBot `1.10.4`: подтверждённая OTP-страница создаёт новую подписанную форму, устойчивую к потере `Origin` и повторных Access-заголовков в мобильном браузере. |
 | `401` после перезапуска | Проверьте постоянные volumes `data`, одинаковый `PROJECT_IDENTITY_SECRET` и актуальные Access AUD/issuer. |
 | DNS record already exists | Удалите конфликтующую A/AAAA/CNAME запись или используйте другой hostname. |
 
@@ -240,4 +240,3 @@ curl.exe -I https://discord.example.com/health
 - потерянный tunnel token нужно сменить в Cloudflare и локальном `.env`;
 - tunnel создаёт только исходящие соединения, поэтому входящий порт на роутере
   или VPS открывать не требуется.
-

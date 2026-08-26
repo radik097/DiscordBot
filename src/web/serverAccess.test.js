@@ -100,6 +100,8 @@ describe("web email access integration", () => {
     expect(setupHtml).toContain('autocomplete="username" readonly');
     expect(setupHtml).toContain("Сохранить пароль в браузере");
     expect(setupHtml).toContain('src="/access-auth.js"');
+    const formProof = setupHtml.match(/name="proof" type="hidden" value="([^"]+)"/)?.[1];
+    expect(formProof).toBeTruthy();
 
     const formPath = "/access/invite";
     const rejected = await fetch(`${base}${formPath}`, {
@@ -122,12 +124,12 @@ describe("web email access integration", () => {
     const activated = await fetch(`${base}${formPath}`, {
       method: "POST",
       headers: {
-        ...identityHeaders(formPath, "member@example.com", "POST"),
         "content-type": "application/x-www-form-urlencoded",
-        origin: "https://discord.example.com",
+        origin: "null",
       },
       body: new URLSearchParams({
         token: inviteUrl.searchParams.get("token"),
+        proof: formProof,
         password: "a secure password",
         passwordConfirm: "a secure password",
       }),

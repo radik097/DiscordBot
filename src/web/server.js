@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { extname, resolve as resolvePath, sep } from "node:path";
 import { loadConfig, saveConfig, validateConfig, buildStructure, wipeStructure, rebuildStructure } from "../structureManager.js";
 import { getQueue, peekQueue, volumePercentToRatio } from "../music/queue.js";
@@ -33,6 +33,7 @@ const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MUTATE_MAX = 120;
 const RATE_LIMIT_PAIR_MAX = 15;
 const RATE_LIMIT_LOGIN_MAX = 10;
+const INVITE_FORM_PROOF_TTL_MS = 15 * 60_000;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -263,13 +264,15 @@ function loginPage(error = "") {
   });
 }
 
-function permanentSetupPage(rawToken, email, error = "") {
+function permanentSetupPage(rawToken, email, error = "", identitySecret = "") {
+  const formProof = createInviteFormProof(identitySecret, rawToken, email);
   return accessPage({
     title: "Создание постоянного доступа",
     content: `${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
       <p>Почта <strong>${escapeHtml(email)}</strong> подтверждена. Создайте пароль для последующих входов.</p>
       <form method="post" action="/access/invite" data-password-form>
         <input name="token" type="hidden" value="${escapeHtml(rawToken)}">
+        <input name="proof" type="hidden" value="${escapeHtml(formProof)}">
         <label>Электронная почта<input id="setupEmail" name="username" type="email" autocomplete="username" readonly value="${escapeHtml(email)}"></label>
         <label>Новый пароль<input id="newPassword" name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
         <label>Повторите пароль<input id="newPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" required minlength="12" maxlength="128"></label>
@@ -307,6 +310,32 @@ function validSameOrigin(req, publicBaseUrl = "") {
   } catch {
     return false;
   }
+}
+
+function createInviteFormProof(secret, rawToken, email, issuedAt = Date.now()) {
+  if (!secret || String(secret).length < 32 || !rawToken || !email) return "";
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const signature = createHmac("sha256", secret)
+    .update(`discordbot-invite-form-v1\n${rawToken}\n${normalizedEmail}\n${issuedAt}`)
+    .digest("base64url");
+  return `${issuedAt}.${signature}`;
+}
+
+function verifyInviteFormProof(secret, rawToken, email, proof, now = Date.now()) {
+  const [issuedRaw, suppliedSignature, extra] = String(proof || "").split(".");
+  const issuedAt = Number(issuedRaw);
+  if (
+    extra !== undefined
+    || !Number.isFinite(issuedAt)
+    || !suppliedSignature
+    || issuedAt > now + 60_000
+    || now - issuedAt > INVITE_FORM_PROOF_TTL_MS
+  ) return false;
+
+  const expectedSignature = createInviteFormProof(secret, rawToken, email, issuedAt).split(".")[1] || "";
+  const suppliedBuffer = Buffer.from(suppliedSignature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+  return suppliedBuffer.length === expectedBuffer.length && timingSafeEqual(suppliedBuffer, expectedBuffer);
 }
 
 async function readPairToken(req) {
@@ -877,7 +906,7 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
             if (trustedIdentity.email !== invite.email) {
               return accessDeniedPage(`Ссылка выдана для другой электронной почты. Подтверждён адрес ${trustedIdentity.email}.`, 403);
             }
-            if (invite.kind === "permanent") return permanentSetupPage(rawToken, invite.email);
+            if (invite.kind === "permanent") return permanentSetupPage(rawToken, invite.email, "", identitySecret);
             const redeemed = access.redeemDayInvite(rawToken, trustedIdentity.email, req);
             if (!redeemed) return accessDeniedPage("Ссылка уже использована либо истекла.", 401);
             return new Response(null, {
@@ -890,16 +919,21 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
             });
           }
           if (req.method === "POST") {
-            if (!validSameOrigin(req, access.publicBaseUrl)) return accessDeniedPage("Запрос отклонён.", 403);
             const form = await readForm(req);
             if (!form) return accessDeniedPage("Форма слишком большая.", 413);
             const rawToken = form.get("token") || "";
             const invite = access.getInvite(rawToken);
             if (!invite || invite.kind !== "permanent") return accessDeniedPage("Ссылка уже использована либо истекла.", 401);
-            if (!trustedIdentity?.email || trustedIdentity.email !== invite.email) return accessDeniedPage("Подтверждённая почта не совпадает с адресом приглашения.", 403);
-            if (form.get("password") !== form.get("passwordConfirm")) return permanentSetupPage(rawToken, invite.email, "Пароли не совпадают.");
+            const validFormProof = verifyInviteFormProof(identitySecret, rawToken, invite.email, form.get("proof"));
+            if (!validFormProof && !validSameOrigin(req, access.publicBaseUrl)) return accessDeniedPage("Запрос отклонён.", 403);
+            if (!validFormProof && (!trustedIdentity?.email || trustedIdentity.email !== invite.email)) {
+              return accessDeniedPage("Подтверждённая почта не совпадает с адресом приглашения.", 403);
+            }
+            if (form.get("password") !== form.get("passwordConfirm")) {
+              return permanentSetupPage(rawToken, invite.email, "Пароли не совпадают.", identitySecret);
+            }
             try {
-              const activated = access.completePermanentInvite(rawToken, trustedIdentity.email, form.get("password"), req);
+              const activated = access.completePermanentInvite(rawToken, invite.email, form.get("password"), req);
               if (!activated) return accessDeniedPage("Ссылка уже использована либо истекла.", 401);
               return new Response(null, {
                 status: 303,
@@ -910,7 +944,7 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
                 },
               });
             } catch (error) {
-              return permanentSetupPage(rawToken, invite.email, error.message);
+              return permanentSetupPage(rawToken, invite.email, error.message, identitySecret);
             }
           }
           return notFound();
