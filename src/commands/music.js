@@ -3,6 +3,7 @@ import { loadConfig } from "../structureManager.js";
 import { resolvePlaylist, resolveTrack } from "../music/source.js";
 import { resolveAttachment } from "../music/attachment.js";
 import { getQueue, peekQueue, volumePercentToRatio } from "../music/queue.js";
+import { hasBotOperatorRole } from "./phone.js";
 
 function formatDuration(totalSec) {
   const sec = Math.floor(totalSec || 0);
@@ -11,18 +12,23 @@ function formatDuration(totalSec) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+export function canUseMusicCommands(interaction, config = {}) {
+  const isAdmin = interaction.member?.permissions?.has?.(PermissionFlagsBits.Administrator);
+  if (isAdmin || hasBotOperatorRole(interaction)) return true;
+
+  const allowed = new Set(config.musicAllowedRoles ?? []);
+  return interaction.member?.roles?.cache?.some?.((role) => allowed.has(role.name)) ?? false;
+}
+
 async function checkAccess(interaction) {
   if (!interaction.guild || !interaction.member) {
     await interaction.reply({ content: "Команда работает только на сервере.", flags: MessageFlags.Ephemeral });
     return false;
   }
-  const isAdmin = interaction.member.permissions?.has?.(PermissionFlagsBits.Administrator);
-  if (isAdmin) return true;
+  if (canUseMusicCommands(interaction)) return true;
 
   const config = loadConfig();
-  const allowed = new Set(config.musicAllowedRoles ?? []);
-  const hasRole = interaction.member.roles.cache.some((r) => allowed.has(r.name));
-  if (!hasRole) {
+  if (!canUseMusicCommands(interaction, config)) {
     await interaction.reply({ content: "У вас нет доступа к музыкальным командам.", flags: MessageFlags.Ephemeral });
     return false;
   }
