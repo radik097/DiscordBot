@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.15.0
+    image: discord-bot:1.15.1
     build:
       context: D:/DiscordBot-access-staging
       dockerfile: Dockerfile

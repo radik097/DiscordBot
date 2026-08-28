@@ -176,7 +176,9 @@ async function api(path, opts) {
       state.csrfToken = retryToken.token || null;
       return api(path, { ...opts, _retryCsrf: true });
     }
-    throw new Error(data.error || data.errors?.join(", ") || `HTTP ${res.status}`);
+    const error = new Error(data.error || data.errors?.join(", ") || `HTTP ${res.status}`);
+    error.status = res.status;
+    throw error;
   }
   if (data?.token) {
     state.csrfToken = data.token;
@@ -731,6 +733,8 @@ async function loadMusic() {
     const vol = document.getElementById("musicVolume");
     if (document.activeElement !== vol) vol.value = Math.round((data.volume ?? 1) * 100);
     document.getElementById("musicVolumeLabel").textContent = `${vol.value}%`;
+    const musicError = document.getElementById("musicError");
+    if (musicError.textContent.startsWith("Ошибка обновления:")) musicError.textContent = "";
   } catch (err) {
     document.getElementById("musicError").textContent = "Ошибка обновления: " + err.message;
   } finally {
@@ -740,8 +744,16 @@ async function loadMusic() {
 
 async function musicAction(action, body) {
   try {
-    const result = await api(`/api/music/${state.guildId}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : "{}" });
-    return result;
+    const gatewayRetryDelays = action === "volume" ? [400, 900, 1800] : [];
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await api(`/api/music/${state.guildId}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : "{}" });
+      } catch (err) {
+        const retryableGatewayError = [502, 503, 504].includes(err?.status);
+        if (!retryableGatewayError || attempt >= gatewayRetryDelays.length) throw err;
+        await new Promise((resolve) => setTimeout(resolve, gatewayRetryDelays[attempt]));
+      }
+    }
   } catch (err) {
     document.getElementById("musicError").textContent = "Ошибка: " + err.message;
     return null;
