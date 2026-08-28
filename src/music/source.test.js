@@ -42,4 +42,32 @@ describe("music timestamps", () => {
     expect(track.sourceType).toBe("cobalt");
     expect(calls).toEqual([{ url: "https://soundcloud.com/artist/track", requestedBy: "tester" }]);
   });
+
+  test("resolves a Spotify track to one YouTube audio match without calling Cobalt", async () => {
+    let cobaltCalled = false;
+    let searchQuery;
+    const track = await resolveTrack("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT", "tester", {
+      cobaltResolver: async () => {
+        cobaltCalled = true;
+      },
+      spotifyResolver: async (url) => ({ title: "Never Gonna Give You Up", sourceUrl: url }),
+      spotifySearchImpl: async (query) => {
+        searchQuery = query;
+        return {
+          url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+          title: "Rick Astley - Never Gonna Give You Up",
+          durationInSec: 213,
+          thumbnails: [{ url: "https://i.ytimg.com/example.jpg" }],
+        };
+      },
+    });
+    expect(cobaltCalled).toBeFalse();
+    expect(searchQuery).toBe("Never Gonna Give You Up official audio");
+    expect(track).toMatchObject({
+      sourceType: "spotify-match",
+      sourceService: "spotify.com",
+      url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      requestedBy: "tester",
+    });
+  });
 });

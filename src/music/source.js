@@ -9,6 +9,7 @@ import { StreamType } from "@discordjs/voice";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { isCobaltMusicUrl, resolveCobaltTrack } from "./cobaltSource.js";
+import { isSpotifyUrl, resolveSpotifyTrack } from "./spotifySource.js";
 
 const YTDLP_PATH = (() => {
   for (const name of ["yt-dlp.exe", "yt-dlp"]) {
@@ -201,6 +202,26 @@ export async function resolveInput(query, requestedBy) {
   return { kind: "track", tracks: track ? [track] : [] };
 }
 
+async function searchYouTubeTrack(query) {
+  const info = await readYtDlpJson([
+    "--flat-playlist",
+    "--dump-single-json",
+    "--skip-download",
+    "--playlist-end", "1",
+    "--js-runtimes", "bun",
+    ...optionalYtDlpArgs(),
+    `ytsearch1:${query}`,
+  ]);
+  const entry = info.entries?.find(Boolean);
+  if (!entry?.id || !entry.title) return null;
+  return {
+    url: entry.webpage_url || `https://www.youtube.com/watch?v=${entry.id}`,
+    title: entry.title,
+    durationInSec: Number(entry.duration) || 0,
+    thumbnails: entry.thumbnails || [],
+  };
+}
+
 export function singleTrackQuery(query) {
   const value = String(query ?? "").trim();
   try {
@@ -228,8 +249,25 @@ export function singleTrackQuery(query) {
   }
 }
 
-export async function resolveTrack(query, requestedBy, { cobaltResolver = resolveCobaltTrack } = {}) {
+export async function resolveTrack(query, requestedBy, {
+  cobaltResolver = resolveCobaltTrack,
+  spotifyResolver = resolveSpotifyTrack,
+  spotifySearchImpl = searchYouTubeTrack,
+  searchImpl = (...args) => play.search(...args),
+} = {}) {
   const trackQuery = singleTrackQuery(query);
+  if (isSpotifyUrl(trackQuery)) {
+    const spotify = await spotifyResolver(trackQuery);
+    const match = await spotifySearchImpl(`${spotify.title} official audio`);
+    if (!match) throw new Error(`Не удалось найти аудио для Spotify-трека «${spotify.title}».`);
+    return {
+      ...toTrack(match, requestedBy),
+      sourceType: "spotify-match",
+      sourceService: "spotify.com",
+      originalTitle: spotify.title,
+      originalUrl: spotify.sourceUrl,
+    };
+  }
   if (isCobaltMusicUrl(trackQuery)) return cobaltResolver(trackQuery, requestedBy);
   const validated = await play.validate(trackQuery);
 
@@ -238,7 +276,7 @@ export async function resolveTrack(query, requestedBy, { cobaltResolver = resolv
     return toTrack(info.video_details, requestedBy, trackQuery);
   }
 
-  const results = await play.search(trackQuery, { limit: 1, source: { youtube: "video" } });
+  const results = await searchImpl(trackQuery, { limit: 1, source: { youtube: "video" } });
   if (!results.length) return null;
   return toTrack(results[0], requestedBy);
 }

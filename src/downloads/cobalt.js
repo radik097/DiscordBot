@@ -51,6 +51,14 @@ export class CobaltError extends Error {
   }
 }
 
+function cobaltErrorMessage(error = {}) {
+  const code = String(error.code || "cobalt.error");
+  if (["error.api.link.invalid", "error.api.link.unsupported"].includes(code)) {
+    return "Cobalt не поддерживает эту ссылку или сервис.";
+  }
+  return error.context?.service || code || "Cobalt не смог обработать ссылку.";
+}
+
 export class CobaltClient {
   constructor({ apiUrl = process.env.COBALT_API_URL || "http://cobalt:9000/", apiKey = process.env.COBALT_API_KEY || "", fetchImpl = fetch } = {}) {
     this.apiUrl = new URL(apiUrl.endsWith("/") ? apiUrl : `${apiUrl}/`);
@@ -76,11 +84,14 @@ export class CobaltClient {
       signal,
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok || !payload) {
-      throw new CobaltError(`Cobalt API недоступен (HTTP ${response.status}).`, "cobalt.http");
+    if (payload?.status === "error") {
+      throw new CobaltError(cobaltErrorMessage(payload.error), payload.error?.code);
     }
-    if (payload.status === "error") {
-      throw new CobaltError(payload.error?.context?.service || payload.error?.code || "Cobalt не смог обработать ссылку.", payload.error?.code);
+    if (!response.ok || !payload) {
+      const message = response.status >= 500
+        ? `Cobalt API временно недоступен (HTTP ${response.status}).`
+        : `Cobalt отклонил запрос (HTTP ${response.status}).`;
+      throw new CobaltError(message, "cobalt.http");
     }
     if (["tunnel", "redirect", "local-processing"].includes(payload.status) && payload.url) {
       return { status: payload.status, url: payload.url, filename: payload.filename || "download" };

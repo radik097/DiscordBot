@@ -39,7 +39,7 @@ const play = {
   data: new SlashCommandBuilder()
     .setName("play")
     .setDescription("Включить трек из поиска, ссылки, плейлиста или файла")
-    .addStringOption((o) => o.setName("query").setDescription("Название, YouTube или ссылка сервиса, поддерживаемого Cobalt").setRequired(false))
+    .addStringOption((o) => o.setName("query").setDescription("Название, YouTube, Spotify-трек или ссылка сервиса Cobalt").setRequired(false))
     .addStringOption((o) => o.setName("playlist").setDescription("Ссылка на YouTube-плейлист").setRequired(false))
     .addAttachmentOption((o) => o.setName("file").setDescription("Аудио или видео; будет воспроизведена звуковая дорожка").setRequired(false)),
   async execute(interaction) {
@@ -100,7 +100,9 @@ const play = {
     }
 
     const [track] = resolved.tracks;
-    const via = track.sourceType === "cobalt" ? ` · Cobalt (${track.sourceService})` : "";
+    const via = track.sourceType === "cobalt"
+      ? ` · Cobalt (${track.sourceService})`
+      : track.sourceType === "spotify-match" ? " · Spotify → YouTube" : "";
     await interaction.editReply(`${wasIdle ? "▶️ Играю" : "➕ Добавлено в очередь"}: **${track.title}** (${formatDuration(track.durationSec)})${via}`);
   },
 };

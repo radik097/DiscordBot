@@ -1,6 +1,6 @@
 # 🤖 Discord Bot
 
-Текущая версия: **1.14.0**. Подробное описание изменений — в
+Текущая версия: **1.14.1**. Подробное описание изменений — в
 [CHANGELOG.md](CHANGELOG.md).
 
 Discord-бот на discord.js/Bun: управление структурой сервера (роли, каналы, права),
@@ -156,7 +156,7 @@ Discord-сервера. Шаблон лежит в `config/structure.example.jso
 
 ### Docker
 ```bash
-docker compose up -d --build               # собрать/запустить 1.14.0 вместе с внутренним Cobalt
+docker compose up -d --build               # собрать/запустить 1.14.1 вместе с внутренним Cobalt
 docker compose --profile pot up -d --build # запустить вместе с PO Token Provider
 docker compose --profile server --profile pot up -d --build # VPS + Cloudflare
 docker compose down          # остановить и удалить контейнер
@@ -167,7 +167,7 @@ docker compose --profile pot build --no-cache discord-bot # полная пер�
 
 ### Discord (слэш-команды)
 ```
-/play query:<название, YouTube или ссылка сервиса Cobalt>
+/play query:<название, YouTube, Spotify-трек или ссылка сервиса Cobalt>
 /play playlist:<ссылка на YouTube-плейлист>
 /play file:<аудио/видео>
 /skip    /pause    /resume    /stop
@@ -227,6 +227,9 @@ HTTP(S)-ссылка не с YouTube передаётся внутреннему
 сервисов не разворачиваются; `picker` выбирает общую аудиодорожку либо первый
 подходящий видеоэлемент. DRM, paywall и приватный контент не обходятся. Лимит
 одного трека — 200 МБ через `COBALT_MUSIC_MAX_BYTES`.
+Ссылка на один Spotify-трек обрабатывается отдельно: бот получает название через
+официальный Spotify oEmbed и ищет один аудиорезультат на YouTube. Сам поток
+Spotify не скачивается, Cobalt для Spotify не вызывается, DRM не обходится.
 Динамические YouTube Mix (`list=RD...`) сохраняют исходный `v=...` либо
 восстанавливают seed-видео из ID, после чего также разбиваются на треки.
 Веб-панель обновляет музыкальный прогресс каждую секунду и показывает

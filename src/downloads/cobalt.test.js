@@ -54,7 +54,16 @@ describe("CobaltClient", () => {
   });
 
   test("maps Cobalt error responses", async () => {
-    const client = new CobaltClient({ fetchImpl: async () => Response.json({ status: "error", error: { code: "error.api.link.unsupported" } }) });
-    await expect(client.resolve("https://example.com/video")).rejects.toBeInstanceOf(CobaltError);
+    const client = new CobaltClient({
+      fetchImpl: async () => Response.json(
+        { status: "error", error: { code: "error.api.link.invalid" } },
+        { status: 400 },
+      ),
+    });
+    await expect(client.resolve("https://example.com/video"))
+      .rejects.toMatchObject({
+        message: "Cobalt не поддерживает эту ссылку или сервис.",
+        code: "error.api.link.invalid",
+      });
   });
 });

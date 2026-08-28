@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.14.0
+    image: discord-bot:1.14.1
     container_name: discord-bot
     build:
       context: .
