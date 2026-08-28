@@ -106,11 +106,13 @@ function buildPlaylistUrl(listId, seedVideoId = "", pp = "") {
   return `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
 }
 
-function playlistUrlFromQuery(query) {
+export function playlistUrlFromQuery(query, { linksOnly = false } = {}) {
   const value = String(query ?? "").trim();
-  const direct = value.match(/^list=([A-Za-z0-9_-]{10,128})$/i);
-  if (direct) return buildPlaylistUrl(direct[1]);
-  if (/^(?:PL|RD|UU|LL|FL|OLAK5uy)[A-Za-z0-9_-]{8,120}$/.test(value)) return buildPlaylistUrl(value);
+  if (!linksOnly) {
+    const direct = value.match(/^list=([A-Za-z0-9_-]{10,128})$/i);
+    if (direct) return buildPlaylistUrl(direct[1]);
+    if (/^(?:PL|RD|UU|LL|FL|OLAK5uy)[A-Za-z0-9_-]{8,120}$/.test(value)) return buildPlaylistUrl(value);
+  }
 
   try {
     const url = new URL(value);
@@ -152,8 +154,8 @@ function readYtDlpJson(args, timeoutMs = 60000) {
   });
 }
 
-export async function resolvePlaylist(query, requestedBy) {
-  const playlistUrl = playlistUrlFromQuery(query);
+export async function resolvePlaylist(query, requestedBy, { linksOnly = false } = {}) {
+  const playlistUrl = playlistUrlFromQuery(query, { linksOnly });
   if (!playlistUrl) return null;
 
   const info = await readYtDlpJson([
@@ -198,15 +200,43 @@ export async function resolveInput(query, requestedBy) {
   return { kind: "track", tracks: track ? [track] : [] };
 }
 
+export function singleTrackQuery(query) {
+  const value = String(query ?? "").trim();
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    const isYouTube = host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com");
+    if (!isYouTube || !url.searchParams.has("list")) return value;
+
+    const videoId = host === "youtu.be"
+      ? url.pathname.split("/").filter(Boolean)[0]
+      : url.searchParams.get("v");
+    if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      throw new Error("Для плейлиста используйте параметр `playlist`, а не `query`");
+    }
+    const trackUrl = new URL("https://www.youtube.com/watch");
+    trackUrl.searchParams.set("v", videoId);
+    for (const key of ["t", "start"]) {
+      const timestamp = url.searchParams.get(key);
+      if (timestamp) trackUrl.searchParams.set(key, timestamp);
+    }
+    return trackUrl.href;
+  } catch (error) {
+    if (error?.message?.includes("параметр `playlist`")) throw error;
+    return value;
+  }
+}
+
 export async function resolveTrack(query, requestedBy) {
-  const validated = await play.validate(query);
+  const trackQuery = singleTrackQuery(query);
+  const validated = await play.validate(trackQuery);
 
   if (validated === "yt_video") {
-    const info = await play.video_basic_info(query);
-    return toTrack(info.video_details, requestedBy, query);
+    const info = await play.video_basic_info(trackQuery);
+    return toTrack(info.video_details, requestedBy, trackQuery);
   }
 
-  const results = await play.search(query, { limit: 1, source: { youtube: "video" } });
+  const results = await play.search(trackQuery, { limit: 1, source: { youtube: "video" } });
   if (!results.length) return null;
   return toTrack(results[0], requestedBy);
 }

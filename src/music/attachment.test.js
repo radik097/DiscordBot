@@ -192,10 +192,11 @@ describe("Discord media attachments", () => {
     }
   });
 
-  test("/play exposes mutually optional query and attachment inputs", () => {
+  test("/play exposes separate mutually optional track, playlist, and attachment inputs", () => {
     const play = commands.find((command) => command.data.name === "play").data.toJSON();
     expect(play.options.map((option) => ({ name: option.name, required: option.required ?? false }))).toEqual([
       { name: "query", required: false },
+      { name: "playlist", required: false },
       { name: "file", required: false },
     ]);
   });

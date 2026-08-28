@@ -28,12 +28,12 @@ describe("/phone", () => {
     expect(data.toJSON()).toMatchObject({ name: "phone", dm_permission: false });
   });
 
-  test("recognizes the Ботовод role case-insensitively", () => {
-    expect(hasBotOperatorRole(interactionWithRoles(["ботовод"]))).toBe(true);
+  test("recognizes the Ботоводство role case-insensitively", () => {
+    expect(hasBotOperatorRole(interactionWithRoles(["ботоводство"]))).toBe(true);
     expect(hasBotOperatorRole(interactionWithRoles(["Administrator"]))).toBe(false);
   });
 
-  test("denies everyone without the Ботовод role and does not issue a link", async () => {
+  test("denies everyone without the Ботоводство role and does not issue a link", async () => {
     const interaction = interactionWithRoles(["Administrator"]);
     let starts = 0;
     registerRemoteAccess(interaction.client, { start: async () => { starts += 1; } });

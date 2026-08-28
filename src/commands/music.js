@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from "discord.js";
 import { loadConfig } from "../structureManager.js";
-import { resolveInput } from "../music/source.js";
+import { resolvePlaylist, resolveTrack } from "../music/source.js";
 import { resolveAttachment } from "../music/attachment.js";
 import { getQueue, peekQueue, volumePercentToRatio } from "../music/queue.js";
 
@@ -32,8 +32,9 @@ async function checkAccess(interaction) {
 const play = {
   data: new SlashCommandBuilder()
     .setName("play")
-    .setDescription("Включить YouTube-трек, плейлист или приложенный медиафайл")
-    .addStringOption((o) => o.setName("query").setDescription("Трек, запрос, ссылка или ID плейлиста").setRequired(false))
+    .setDescription("Включить один трек, плейлист по ссылке или приложенный медиафайл")
+    .addStringOption((o) => o.setName("query").setDescription("Один трек: название или ссылка на видео").setRequired(false))
+    .addStringOption((o) => o.setName("playlist").setDescription("Ссылка на YouTube-плейлист").setRequired(false))
     .addAttachmentOption((o) => o.setName("file").setDescription("Аудио или видео; будет воспроизведена звуковая дорожка").setRequired(false)),
   async execute(interaction) {
     if (!(await checkAccess(interaction))) return;
@@ -42,26 +43,37 @@ const play = {
       return interaction.reply({ content: "Зайдите в голосовой канал, чтобы включить музыку.", flags: MessageFlags.Ephemeral });
     }
 
-    const query = interaction.options.getString("query");
+    const query = interaction.options.getString("query")?.trim();
+    const playlistQuery = interaction.options.getString("playlist")?.trim();
     const attachment = interaction.options.getAttachment("file");
-    if (!query && !attachment) {
-      return interaction.reply({ content: "Укажите `query` или приложите `file`.", flags: MessageFlags.Ephemeral });
+    const selectedSources = [query, playlistQuery, attachment].filter(Boolean);
+    if (!selectedSources.length) {
+      return interaction.reply({ content: "Укажите `query`, `playlist` или приложите `file`.", flags: MessageFlags.Ephemeral });
     }
-    if (query && attachment) {
-      return interaction.reply({ content: "Укажите только один источник: `query` или `file`.", flags: MessageFlags.Ephemeral });
+    if (selectedSources.length > 1) {
+      return interaction.reply({ content: "Укажите только один источник: `query`, `playlist` или `file`.", flags: MessageFlags.Ephemeral });
     }
 
     await interaction.deferReply();
 
     let resolved;
     try {
-      resolved = attachment
-        ? await resolveAttachment(attachment, interaction.user.tag)
-        : await resolveInput(query, interaction.user.tag);
+      if (attachment) {
+        resolved = await resolveAttachment(attachment, interaction.user.tag);
+      } else if (playlistQuery) {
+        const playlist = await resolvePlaylist(playlistQuery, interaction.user.tag, { linksOnly: true });
+        if (!playlist) {
+          return interaction.editReply("Укажите корректную ссылку на YouTube-плейлист в параметре `playlist`.");
+        }
+        resolved = { kind: "playlist", ...playlist };
+      } else {
+        const track = await resolveTrack(query, interaction.user.tag);
+        resolved = { kind: "track", tracks: track ? [track] : [] };
+      }
     } catch (err) {
       return interaction.editReply(`Не удалось обработать запрос: ${err.message}`);
     }
-    if (!resolved.tracks.length) return interaction.editReply("В плейлисте или поиске нет доступных треков.");
+    if (!resolved.tracks.length) return interaction.editReply("По запросу не найдено доступных треков.");
 
     const queue = getQueue(interaction.guildId);
     queue.textChannelId = interaction.channelId;

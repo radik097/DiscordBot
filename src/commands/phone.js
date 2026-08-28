@@ -1,7 +1,7 @@
 import { MessageFlags, SlashCommandBuilder } from "discord.js";
 import { getRemoteAccess } from "../web/remoteAccessRegistry.js";
 
-export const BOT_OPERATOR_ROLE_NAME = "Ботовод";
+export const BOT_OPERATOR_ROLE_NAME = "Ботоводство";
 
 const normalizedRoleName = (value) => String(value ?? "").trim().toLocaleLowerCase("ru-RU");
 
