@@ -83,6 +83,26 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS downloads (
+    id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT,
+    user_id TEXT NOT NULL,
+    user_tag TEXT,
+    source_host TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    status TEXT NOT NULL,
+    filename TEXT,
+    size_bytes INTEGER,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    completed_at INTEGER,
+    expires_at INTEGER
+  );
+`);
+
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_guild ON messages(guild_id, created_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);");
@@ -91,6 +111,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_audit_action_time ON audit_log(action, c
 db.exec("CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(actor_session);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_mobile_sessions_expires_at ON mobile_sessions(expires_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_queue_states_updated_at ON queue_states(updated_at);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_downloads_guild_created ON downloads(guild_id, created_at);");
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at)
@@ -186,6 +207,10 @@ const listMessageChannelsStmt = db.prepare(`SELECT DISTINCT channel_id, channel_
 const insertAuditStmt = db.prepare(`
   INSERT INTO audit_log (created_at, action, actor_session, actor_guild_id, actor_ip, actor_user_agent, resource, details)
   VALUES ($createdAt, $action, $actorSession, $actorGuildId, $actorIp, $actorUserAgent, $resource, $details)
+`);
+const insertDownloadStmt = db.prepare(`
+  INSERT INTO downloads (id, guild_id, channel_id, user_id, user_tag, source_host, source_url, status, created_at)
+  VALUES ($id, $guildId, $channelId, $userId, $userTag, $sourceHost, $sourceUrl, $status, $createdAt)
 `);
 
 export function logMessage(message) {
@@ -392,6 +417,58 @@ export function listRecentAudits({ guildId, limit = 50 } = {}) {
       LIMIT $limit
     `)
     .all({ $guildId: guildId ?? "", $limit: Math.min(Math.max(Number(limit) || 50, 1), 200) });
+}
+
+export function createDownloadRecord(record) {
+  insertDownloadStmt.run({
+    $id: record.id,
+    $guildId: record.guildId ?? "",
+    $channelId: record.channelId ?? null,
+    $userId: record.userId,
+    $userTag: record.userTag ?? null,
+    $sourceHost: record.sourceHost,
+    $sourceUrl: record.sourceUrl,
+    $status: record.status,
+    $createdAt: record.createdAt ?? Date.now(),
+  });
+}
+
+export function updateDownloadRecord(id, changes = {}) {
+  const columns = {
+    status: "status",
+    filename: "filename",
+    sizeBytes: "size_bytes",
+    error: "error",
+    startedAt: "started_at",
+    completedAt: "completed_at",
+    expiresAt: "expires_at",
+  };
+  const sets = [];
+  const params = { $id: id };
+  for (const [key, column] of Object.entries(columns)) {
+    if (!Object.hasOwn(changes, key)) continue;
+    sets.push(`${column} = $${key}`);
+    params[`$${key}`] = changes[key] ?? null;
+  }
+  if (sets.length) db.prepare(`UPDATE downloads SET ${sets.join(", ")} WHERE id = $id`).run(params);
+}
+
+export function listDownloadRecords({ guildId, limit = 100 } = {}) {
+  const bounded = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  if (guildId) {
+    return db.prepare(`
+      SELECT id, guild_id as guildId, channel_id as channelId, user_id as userId, user_tag as userTag,
+             source_host as sourceHost, source_url as sourceUrl, status, filename, size_bytes as sizeBytes,
+             error, created_at as createdAt, started_at as startedAt, completed_at as completedAt, expires_at as expiresAt
+      FROM downloads WHERE guild_id = $guildId ORDER BY created_at DESC LIMIT $limit
+    `).all({ $guildId: guildId, $limit: bounded });
+  }
+  return db.prepare(`
+    SELECT id, guild_id as guildId, channel_id as channelId, user_id as userId, user_tag as userTag,
+           source_host as sourceHost, source_url as sourceUrl, status, filename, size_bytes as sizeBytes,
+           error, created_at as createdAt, started_at as startedAt, completed_at as completedAt, expires_at as expiresAt
+    FROM downloads ORDER BY created_at DESC LIMIT $limit
+  `).all({ $limit: bounded });
 }
 
 function parseJsonOrNull(value) {

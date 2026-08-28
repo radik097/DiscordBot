@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Collection } from "discord.js";
 import { AccessControl, trustedIdentitySignature } from "./accessControl.js";
 import { startWebServer } from "./server.js";
+import { downloadService } from "../downloads/service.js";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const SECRET = "integration-project-identity-secret-long-enough";
 const OWNER = "rodionaustralia@gmail.com";
@@ -58,6 +61,20 @@ describe("web email access integration", () => {
     const me = await fetch(`${base}/api/access/me`, { headers: { cookie } });
     expect(me.status).toBe(200);
     expect(await me.json()).toMatchObject({ email: "guest@example.com", kind: "day", owner: false });
+  });
+
+  test("serves a short-lived download token without exposing the storage path", async () => {
+    const filePath = join(tmpdir(), `discord-download-${crypto.randomUUID()}.txt`);
+    await Bun.write(filePath, "download payload");
+    downloadService.publicBaseUrl = base;
+    const link = downloadService.createPublicLink({ id: crypto.randomUUID(), path: filePath, filename: "пример.txt", size: 16 });
+    expect(link.url).not.toContain(filePath);
+    const response = await fetch(link.url);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(response.headers.get("content-disposition")).toContain("filename*=UTF-8''");
+    expect(await response.text()).toBe("download payload");
+    downloadService.cleanupExpired(link.expiresAt + 1);
   });
 
   test("owner activity blocks a guest mutation but not guest reads", async () => {

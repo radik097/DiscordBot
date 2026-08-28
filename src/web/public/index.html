@@ -278,6 +278,27 @@
     </div>
   </article>
 
+  <article class="panel" data-panel="downloads" data-icon="⬇️" data-title="Загрузки">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">⬇️</span>
+      <span class="panel-title">Загрузки</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div id="downloadSettings" class="download-settings"></div>
+      <div class="actions"><button id="downloadsRefresh">Обновить</button></div>
+      <h3>Очередь</h3>
+      <div id="downloadQueue" class="hint">Очередь пуста.</div>
+      <h3>История</h3>
+      <div class="table-scroll"><table class="datatable"><thead><tr><th>Дата</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Размер</th></tr></thead><tbody id="downloadHistory"></tbody></table></div>
+    </div>
+  </article>
+
 </main>
 
 <dialog id="playlistNameDialog" class="playlist-dialog">
@@ -362,6 +383,7 @@
     <button type="button" data-mobile-panel="members">👥 Участники</button>
     <button type="button" data-mobile-panel="stats">📊 Статистика</button>
     <button type="button" data-mobile-panel="history">🗒️ История</button>
+    <button type="button" data-mobile-panel="downloads">⬇️ Загрузки</button>
   </div>
 </div>
 

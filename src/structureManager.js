@@ -26,7 +26,7 @@ export function validateConfig(config) {
     return ["Config must be a JSON object"];
   }
   const arrays = {};
-  for (const key of ["roles", "categories", "channels", "isolationRoles", "musicAllowedRoles", "protectedChannels"]) {
+  for (const key of ["roles", "categories", "channels", "isolationRoles", "musicAllowedRoles", "downloadAllowedRoles", "protectedChannels"]) {
     if (config[key] != null && !Array.isArray(config[key])) errors.push(`${key} must be an array`);
     arrays[key] = Array.isArray(config[key]) ? config[key] : [];
   }
@@ -102,6 +102,9 @@ export function validateConfig(config) {
   }
   for (const role of arrays.musicAllowedRoles) {
     if (!roleNames.has(role)) errors.push("Unknown role in musicAllowedRoles: " + role);
+  }
+  for (const role of arrays.downloadAllowedRoles) {
+    if (!roleNames.has(role)) errors.push("Unknown role in downloadAllowedRoles: " + role);
   }
 
   for (const c of arrays.categories) checkRoleSpec(c?.roles, "category:" + c?.name);

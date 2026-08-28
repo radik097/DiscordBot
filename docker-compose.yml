@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.12.0
+    image: discord-bot:1.13.0
     container_name: discord-bot
     build:
       context: .
@@ -32,6 +32,16 @@ services:
       YTDLP_POT_PROVIDER_URL: ${YTDLP_POT_PROVIDER_URL:-}
       # Optional YouTube player client override (for example, web_embedded).
       YTDLP_PLAYER_CLIENT: ${YTDLP_PLAYER_CLIENT:-}
+      # Internal self-hosted Cobalt API used by /download.
+      COBALT_API_URL: ${COBALT_API_URL:-http://cobalt:9000/}
+      COBALT_API_KEY: ${COBALT_API_KEY:-}
+      DOWNLOAD_PUBLIC_BASE_URL: ${DOWNLOAD_PUBLIC_BASE_URL:-${ACCESS_PUBLIC_BASE_URL:-${PUBLIC_BASE_URL:-}}}
+      DOWNLOAD_MAX_BYTES: ${DOWNLOAD_MAX_BYTES:-524288000}
+      DOWNLOAD_CONCURRENCY: ${DOWNLOAD_CONCURRENCY:-2}
+      DOWNLOAD_QUEUE_MAX: ${DOWNLOAD_QUEUE_MAX:-20}
+      DOWNLOAD_COOLDOWN_MS: ${DOWNLOAD_COOLDOWN_MS:-30000}
+      DOWNLOAD_LINK_TTL_MS: ${DOWNLOAD_LINK_TTL_MS:-1800000}
+      DOWNLOAD_TIMEOUT_MS: ${DOWNLOAD_TIMEOUT_MS:-600000}
 
     # Монтирование директорий для сохранения данных и конфига
     volumes:
@@ -70,6 +80,38 @@ services:
     # Переменные для graceful shutdown
     stop_grace_period: 30s
     stop_signal: SIGTERM
+
+    depends_on:
+      cobalt:
+        condition: service_started
+
+  # Cobalt is intentionally not published to the host or Internet. Only the
+  # Discord bot can access it through the private Compose network.
+  cobalt:
+    image: ghcr.io/imputnet/cobalt:11
+    container_name: discord-bot-cobalt
+    init: true
+    restart: unless-stopped
+    read_only: true
+    environment:
+      API_URL: http://cobalt:9000/
+      DURATION_LIMIT: ${COBALT_DURATION_LIMIT:-10800}
+      TUNNEL_LIFESPAN: ${COBALT_TUNNEL_LIFESPAN:-120}
+      RATELIMIT_WINDOW: ${COBALT_RATELIMIT_WINDOW:-60}
+      RATELIMIT_MAX: ${COBALT_RATELIMIT_MAX:-120}
+    expose:
+      - "9000"
+    tmpfs:
+      - /tmp:size=1g,noexec,nosuid,nodev
+    mem_limit: ${COBALT_MEMORY_LIMIT:-1g}
+    cpus: ${COBALT_CPU_LIMIT:-1.0}
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "2"
 
   # Optional yt-dlp PO Token Provider. Enable with COMPOSE_PROFILES=pot and
   # YTDLP_POT_PROVIDER_URL=http://bgutil-provider:4416 in .env.

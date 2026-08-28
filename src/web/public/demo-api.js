@@ -263,6 +263,11 @@
         { day: "2026-08-20", count: 41 },
       ],
     });
+    if (path === "/api/downloads") return json({
+      settings: { enabled: true, maxBytes: 524288000, concurrency: 2, maxQueue: 20, cooldownMs: 30000, linkTtlMs: 1800000, publicLinks: true, allowedRoles: ["Ботоводство"] },
+      queue: [],
+      history: [{ id: "demo-download", userTag: "DemoUser#0001", sourceHost: "youtube.com", status: "linked", sizeBytes: 31457280, createdAt: now() - 120000 }],
+    });
 
     if (path === "/api/remote-access" && method === "GET") return json({
       enabled: phoneEnabled,

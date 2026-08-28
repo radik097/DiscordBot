@@ -23,6 +23,7 @@ import { RemoteAccess, isLocalRequest } from "./remoteAccess.js";
 import { registerRemoteAccess, unregisterRemoteAccess } from "./remoteAccessRegistry.js";
 import { AccessControl, verifyTrustedIdentity } from "./accessControl.js";
 import { registerAccessControl, unregisterAccessControl } from "./accessControlRegistry.js";
+import { downloadService } from "../downloads/service.js";
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const PUBLIC_ROOT = resolvePath(PUBLIC_DIR.pathname.replace(/^\/([A-Za-z]:)/, "$1"));
@@ -718,6 +719,12 @@ async function handleRemoteAccess(req, url, remote) {
   return notFound();
 }
 
+async function handleDownloads(req, url) {
+  if (req.method !== "GET") return notAllowed("Загрузки в панели доступны только для чтения");
+  const guildId = url.searchParams.get("guildId") || undefined;
+  return json(downloadService.status(loadConfig(), guildId));
+}
+
 async function handleAccessApi(req, url, access, context) {
   const headers = buildSecurityHeaders();
   if (url.pathname === "/api/access/me" && req.method === "GET") {
@@ -792,6 +799,7 @@ async function handleApi(req, url, client, remote, access, context) {
   if (resource === "guilds") return await handleGuildInfo(req, parts, client, context);
   if (resource === "stats") return await handleStats(req, parts, context);
   if (resource === "history") return await handleHistory(req, url, parts, context);
+  if (resource === "downloads") return await handleDownloads(req, url);
   if (resource === "csrf" && req.method === "GET") {
     if (!context?.csrf) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
     return json({ token: context.csrf }, { headers: Object.fromEntries(headers) });
@@ -882,6 +890,21 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
           startedAt: Date.now(),
           access: { enabled: true, ownerPriorityMs: access.ownerPriorityMs },
         }, { status: client.isReady() ? 200 : 503, headers: Object.fromEntries(headers) });
+      }
+
+      const downloadMatch = url.pathname.match(/^\/downloads\/([A-Za-z0-9_-]{40,})\/[^/]+$/);
+      if (downloadMatch) {
+        if (req.method !== "GET" && req.method !== "HEAD") return notAllowed("Разрешены только GET и HEAD");
+        const item = downloadService.takePublicFile(downloadMatch[1]);
+        if (!item) return new Response("Ссылка истекла или недействительна.", { status: 404, headers });
+        const file = Bun.file(item.path);
+        if (!(await file.exists())) return new Response("Файл больше недоступен.", { status: 404, headers });
+        headers.set("content-type", file.type || "application/octet-stream");
+        headers.set("content-length", String(item.size));
+        headers.set("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(item.filename)}`);
+        headers.set("cache-control", "private, no-store, max-age=0");
+        headers.set("x-content-type-options", "nosniff");
+        return new Response(req.method === "HEAD" ? null : file, { headers });
       }
 
       const remoteAuth = remote.isAuthenticated(req);

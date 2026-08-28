@@ -1159,6 +1159,66 @@ async function loadStats() {
   }
 }
 
+// --- Downloads -----------------------------------------------------------
+
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (!bytes) return "—";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+const DOWNLOAD_STATUS = {
+  queued: "в очереди", processing: "скачивается", ready: "готово",
+  linked: "выдана ссылка", error: "ошибка",
+};
+
+async function loadDownloads() {
+  const suffix = state.guildId ? `?guildId=${encodeURIComponent(state.guildId)}` : "";
+  const data = await api(`/api/downloads${suffix}`);
+  const settings = data.settings;
+  const settingsBox = document.getElementById("downloadSettings");
+  settingsBox.innerHTML = "";
+  const items = [
+    ["Cobalt", settings.enabled ? "подключён" : "не настроен"],
+    ["Права", settings.allowedRoles.join(", ") || "только администратор"],
+    ["Лимит файла", formatBytes(settings.maxBytes)],
+    ["Очередь", `${settings.concurrency} одновременно · до ${settings.maxQueue}`],
+    ["Cooldown", `${Math.round(settings.cooldownMs / 1000)} сек.`],
+    ["Ссылки", settings.publicLinks ? `${Math.round(settings.linkTtlMs / 60000)} мин.` : "не настроены"],
+  ];
+  for (const [label, value] of items) {
+    const card = document.createElement("div");
+    const title = document.createElement("span");
+    title.className = "metric-label";
+    title.textContent = label;
+    const detail = document.createElement("strong");
+    detail.textContent = value;
+    card.append(title, detail);
+    settingsBox.appendChild(card);
+  }
+  const queue = document.getElementById("downloadQueue");
+  queue.textContent = data.queue.length
+    ? data.queue.map((job) => `${job.userTag || job.userId}: ${job.sourceHost} — ${DOWNLOAD_STATUS[job.status] || job.status}`).join("\n")
+    : "Очередь пуста.";
+  const body = document.getElementById("downloadHistory");
+  body.innerHTML = "";
+  for (const item of data.history) {
+    const row = document.createElement("tr");
+    for (const value of [fmtTime(item.createdAt), item.userTag || item.userId, item.sourceHost, DOWNLOAD_STATUS[item.status] || item.status, formatBytes(item.sizeBytes)]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    if (item.error) row.title = item.error;
+    body.appendChild(row);
+  }
+}
+
+document.getElementById("downloadsRefresh").addEventListener("click", () => {
+  void loadDownloads().catch((err) => console.warn("[downloads]", err));
+});
+
 // --- Boot --------------------------------------------------------------
 
 (async function boot() {
@@ -1166,7 +1226,7 @@ async function loadStats() {
     await loadAccessIdentity();
     await loadStatus();
     await settleTasks(
-      [loadConfigEditor(), loadMusic(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()],
+      [loadConfigEditor(), loadMusic(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadDownloads()],
       "boot",
     );
     await loadVoiceMembers();

@@ -50,6 +50,13 @@
       ]
     },
     {
+      "name": "Ботоводство",
+      "color": "#5865f2",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": []
+    },
+    {
       "name": "Muted",
       "color": "#5c5e66",
       "hoist": false,
@@ -114,6 +121,7 @@
   ],
 
   "musicAllowedRoles": ["Участник", "Модератор"],
+  "downloadAllowedRoles": ["Ботоводство"],
 
   "globalDenyRoles": {
     "Muted": ["SendMessages"]
