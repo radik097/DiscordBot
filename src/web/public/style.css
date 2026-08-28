@@ -344,6 +344,39 @@ button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
 .playlist-tracks li { padding: 4px 0; overflow-wrap: anywhere; }
 .playlist-empty { color: var(--md-on-surface-muted); padding: 14px 2px; font-size: 13px; }
 
+.cached-history-header,
+.cached-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cached-history-header { margin-bottom: 10px; }
+.cached-history-header h3 { margin: 0 0 4px; }
+.cached-history-header > div,
+.cached-history-info { min-width: 0; }
+.cached-music-history { display: grid; gap: 8px; }
+.cached-history-item {
+  padding: 11px 12px;
+  border: 1px solid var(--md-outline);
+  border-radius: var(--r-md);
+  background: rgba(0, 0, 0, 0.16);
+}
+.cached-history-info { display: grid; gap: 4px; }
+.cached-history-info strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.cached-history-info span { color: var(--md-on-surface-muted); font-size: 11.5px; }
+.cached-history-play { flex: 0 0 auto; color: var(--md-success); }
+
+@media (max-width: 720px) {
+  .cached-history-item { align-items: stretch; flex-direction: column; }
+  .cached-history-play { width: 100%; }
+}
+
 .playlist-dialog {
   width: min(440px, calc(100vw - 28px));
   color: var(--md-on-surface);

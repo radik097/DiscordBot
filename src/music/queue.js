@@ -9,7 +9,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { getAudioStream } from "./source.js";
 import { saveQueueState, loadQueueState } from "./persistence.js";
-import { PcmVolumeTransformer } from "./pcmVolume.js";
+import { recordCachedTrack } from "./history.js";
 
 const IDLE_LEAVE_MS = 5 * 60 * 1000;
 const MAX_QUEUE_SIZE = 500;
@@ -60,7 +60,6 @@ class GuildQueue {
     this.idleTimer = null;
     this.currentProcess = null;
     this.currentResource = null;
-    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     this.playbackOffsetSec = 0;
@@ -161,7 +160,6 @@ class GuildQueue {
     this.playGeneration += 1;
     this.killCurrentProcess();
     this.currentResource = null;
-    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.playbackOffsetSec = 0;
     this.player.stop(true);
@@ -353,7 +351,6 @@ class GuildQueue {
     const generation = ++this.playGeneration;
     this.killCurrentProcess();
     this.currentResource = null;
-    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     const next = this.tracks.shift();
@@ -371,7 +368,7 @@ class GuildQueue {
     if (durationSec > 1) this.playbackOffsetSec = Math.min(this.playbackOffsetSec, durationSec - 1);
     scheduleQueueSave();
     try {
-      const { stream, type, process: child, quality, stats } = await getAudioStream(next, next._quality ?? "best", this.playbackOffsetSec);
+      const { stream, type, process: child, quality, stats, localFile } = await getAudioStream(next, next._quality ?? "best", this.playbackOffsetSec);
       if (generation !== this.playGeneration) {
         stream.destroy();
         if (!child.killed) child.kill();
@@ -380,15 +377,20 @@ class GuildQueue {
       this.currentProcess = child;
       this.currentQuality = quality;
       console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}" с ${this.playbackOffsetSec.toFixed(1)}с, quality=${quality}, type=${type}`);
-      const volumeTransformer = new PcmVolumeTransformer(this.volume);
-      stream.pipe(volumeTransformer);
-      const resource = createAudioResource(volumeTransformer, {
+      const resource = createAudioResource(stream, {
         inputType: type,
+        inlineVolume: true,
         metadata: { queueId: next.queueId, generation },
       });
-      this.currentVolumeTransformer = volumeTransformer;
+      if (!resource.volume) throw new Error("Voice runtime не создал регулятор громкости");
+      resource.volume.setVolume(this.volume);
       this.currentResource = resource;
       this.player.play(resource);
+      try {
+        await recordCachedTrack(this.guildId, next, localFile);
+      } catch (historyError) {
+        console.warn(`[music:${this.guildId}] Не удалось обновить историю кэша:`, historyError.message);
+      }
       this.startStatsLogging(stats);
     } catch (err) {
       if (generation !== this.playGeneration) return;
@@ -446,7 +448,7 @@ class GuildQueue {
     const normalized = normalizeVolumeRatio(v);
     if (normalized === null) throw new TypeError("Громкость должна быть конечным числом от 0 до 2");
     this.volume = normalized;
-    this.currentVolumeTransformer?.setVolume(normalized);
+    this.currentResource?.volume?.setVolume(normalized);
     scheduleQueueSave();
     return normalized;
   }
@@ -461,7 +463,6 @@ class GuildQueue {
     this.tracks = [];
     this.playing = null;
     this.currentResource = null;
-    this.currentVolumeTransformer = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     this.playbackOffsetSec = 0;

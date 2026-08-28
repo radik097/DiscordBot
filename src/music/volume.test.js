@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { once } from "node:events";
+import { PassThrough } from "node:stream";
+import { createAudioResource, StreamType } from "@discordjs/voice";
 import {
   getDefaultMusicVolumeRatio,
   getQueue,
@@ -26,11 +29,11 @@ describe("host-side music volume", () => {
     expect(getDefaultMusicVolumeRatio({ MUSIC_DEFAULT_VOLUME_PERCENT: "invalid" })).toBe(1);
   });
 
-  test("applies the new level to the active PCM volume transformer", () => {
+  test("applies the new level to the active Discord Voice resource", () => {
     const queue = getQueue(`volume-test-${Date.now()}`);
     queues.push(queue);
     let applied = null;
-    queue.currentVolumeTransformer = { setVolume: (value) => { applied = value; } };
+    queue.currentResource = { volume: { setVolume: (value) => { applied = value; } } };
 
     expect(queue.setVolume(0)).toBe(0);
     expect(queue.volume).toBe(0);
@@ -40,5 +43,20 @@ describe("host-side music volume", () => {
     expect(queue.volume).toBe(1.35);
     expect(applied).toBe(1.35);
     expect(() => queue.setVolume(Number.NaN)).toThrow("Громкость");
+  });
+
+  test("mutes PCM bytes inside the real inline Discord Voice resource", async () => {
+    const input = new PassThrough();
+    const resource = createAudioResource(input, { inputType: StreamType.Raw, inlineVolume: true });
+    const chunks = [];
+    resource.volume.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    resource.volume.setVolume(0);
+    const frame = Buffer.alloc(3840);
+    for (let offset = 0; offset < frame.length; offset += 2) frame.writeInt16LE(12000, offset);
+    input.end(frame);
+    await once(resource.volume, "end");
+    const output = Buffer.concat(chunks);
+    expect(output.length).toBe(frame.length);
+    for (let offset = 0; offset < output.length; offset += 2) expect(output.readInt16LE(offset)).toBe(0);
   });
 });

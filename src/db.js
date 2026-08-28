@@ -103,6 +103,26 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS music_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    cache_file TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    duration_sec REAL NOT NULL DEFAULT 0,
+    thumbnail TEXT,
+    requested_by TEXT,
+    source_type TEXT,
+    source_service TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    first_played_at INTEGER NOT NULL,
+    last_played_at INTEGER NOT NULL,
+    play_count INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(guild_id, cache_file)
+  );
+`);
+
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_guild ON messages(guild_id, created_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);");
@@ -112,6 +132,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(actor_session
 db.exec("CREATE INDEX IF NOT EXISTS idx_mobile_sessions_expires_at ON mobile_sessions(expires_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_queue_states_updated_at ON queue_states(updated_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_downloads_guild_created ON downloads(guild_id, created_at);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_music_history_guild_played ON music_history(guild_id, last_played_at);");
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at)
@@ -212,6 +233,48 @@ const insertDownloadStmt = db.prepare(`
   INSERT INTO downloads (id, guild_id, channel_id, user_id, user_tag, source_host, source_url, status, created_at)
   VALUES ($id, $guildId, $channelId, $userId, $userTag, $sourceHost, $sourceUrl, $status, $createdAt)
 `);
+const upsertMusicHistoryStmt = db.prepare(`
+  INSERT INTO music_history (
+    guild_id, cache_file, url, title, duration_sec, thumbnail, requested_by,
+    source_type, source_service, size_bytes, first_played_at, last_played_at, play_count
+  ) VALUES (
+    $guildId, $cacheFile, $url, $title, $durationSec, $thumbnail, $requestedBy,
+    $sourceType, $sourceService, $sizeBytes, $playedAt, $playedAt, 1
+  )
+  ON CONFLICT(guild_id, cache_file) DO UPDATE SET
+    url = excluded.url,
+    title = excluded.title,
+    duration_sec = excluded.duration_sec,
+    thumbnail = excluded.thumbnail,
+    requested_by = excluded.requested_by,
+    source_type = excluded.source_type,
+    source_service = excluded.source_service,
+    size_bytes = excluded.size_bytes,
+    last_played_at = excluded.last_played_at,
+    play_count = music_history.play_count + 1
+`);
+const listMusicHistoryStmt = db.prepare(`
+  SELECT id, guild_id AS guildId, cache_file AS cacheFile, url, title,
+         duration_sec AS durationSec, thumbnail, requested_by AS requestedBy,
+         source_type AS sourceType, source_service AS sourceService,
+         size_bytes AS sizeBytes, first_played_at AS firstPlayedAt,
+         last_played_at AS lastPlayedAt, play_count AS playCount
+  FROM music_history
+  WHERE guild_id = $guildId
+  ORDER BY last_played_at DESC
+  LIMIT $limit
+`);
+const getMusicHistoryStmt = db.prepare(`
+  SELECT id, guild_id AS guildId, cache_file AS cacheFile, url, title,
+         duration_sec AS durationSec, thumbnail, requested_by AS requestedBy,
+         source_type AS sourceType, source_service AS sourceService,
+         size_bytes AS sizeBytes, first_played_at AS firstPlayedAt,
+         last_played_at AS lastPlayedAt, play_count AS playCount
+  FROM music_history
+  WHERE guild_id = $guildId AND id = $id
+`);
+const deleteMusicHistoryStmt = db.prepare(`DELETE FROM music_history WHERE guild_id = $guildId AND id = $id`);
+const clearMusicHistoryStmt = db.prepare(`DELETE FROM music_history WHERE guild_id = $guildId`);
 
 export function logMessage(message) {
   insertStmt.run({
@@ -469,6 +532,41 @@ export function listDownloadRecords({ guildId, limit = 100 } = {}) {
            error, created_at as createdAt, started_at as startedAt, completed_at as completedAt, expires_at as expiresAt
     FROM downloads ORDER BY created_at DESC LIMIT $limit
   `).all({ $limit: bounded });
+}
+
+export function upsertMusicHistory(record) {
+  upsertMusicHistoryStmt.run({
+    $guildId: record.guildId,
+    $cacheFile: record.cacheFile,
+    $url: record.url,
+    $title: record.title,
+    $durationSec: Number(record.durationSec) || 0,
+    $thumbnail: record.thumbnail ?? null,
+    $requestedBy: record.requestedBy ?? null,
+    $sourceType: record.sourceType ?? null,
+    $sourceService: record.sourceService ?? null,
+    $sizeBytes: Number(record.sizeBytes) || 0,
+    $playedAt: Number(record.playedAt) || Date.now(),
+  });
+}
+
+export function listMusicHistoryRows(guildId, limit = 100) {
+  return listMusicHistoryStmt.all({
+    $guildId: String(guildId),
+    $limit: Math.min(Math.max(Number(limit) || 100, 1), 500),
+  });
+}
+
+export function getMusicHistoryRow(guildId, id) {
+  return getMusicHistoryStmt.get({ $guildId: String(guildId), $id: Number(id) }) || null;
+}
+
+export function deleteMusicHistoryRow(guildId, id) {
+  return deleteMusicHistoryStmt.run({ $guildId: String(guildId), $id: Number(id) }).changes > 0;
+}
+
+export function clearMusicHistoryForGuild(guildId) {
+  return clearMusicHistoryStmt.run({ $guildId: String(guildId) }).changes;
 }
 
 function parseJsonOrNull(value) {

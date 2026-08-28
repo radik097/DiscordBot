@@ -4,6 +4,7 @@ import { extname, resolve as resolvePath, sep } from "node:path";
 import { loadConfig, saveConfig, validateConfig, buildStructure, wipeStructure, rebuildStructure } from "../structureManager.js";
 import { getQueue, peekQueue, volumePercentToRatio } from "../music/queue.js";
 import { resolveInput } from "../music/source.js";
+import { getCachedMusicHistoryTrack, listCachedMusicHistory } from "../music/history.js";
 import {
   getPlaylistSaveStatus,
   getSavedPlaylist,
@@ -448,6 +449,37 @@ async function handleMusic(req, parts, client, auth, mutateHeaders) {
     const playlist = await getSavedPlaylist(guildId, manifestId).catch(() => null);
     if (!playlist) return json({ error: "Сохранённый плейлист не найден" }, { status: 404 });
     return json({ playlist });
+  }
+
+  if (req.method === "GET" && action === "history") {
+    return json({ tracks: await listCachedMusicHistory(guildId, { limit: 200 }) });
+  }
+
+  if (req.method === "POST" && action === "history" && parts[4] && parts[5] === "play") {
+    const { channelId } = await readJson(req);
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return json({ error: "Guild not found" }, { status: 404 });
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel?.isVoiceBased?.()) return json({ error: "Выберите голосовой канал" }, { status: 404 });
+    const track = await getCachedMusicHistoryTrack(guildId, parts[4], "веб-панель");
+    if (!track) return json({ error: "Песня больше не находится в кэше" }, { status: 404 });
+    const queue = getQueue(guildId);
+    queue.connect(channel);
+    try {
+      await queue.enqueueMany([track]);
+    } catch (err) {
+      return json({ error: err.message }, { status: 409 });
+    }
+    logAuditAction({
+      action: "music:history-play",
+      actorSession: auth.sessionId,
+      actorGuildId: guildId,
+      actorIp: getClientIp(req),
+      actorUserAgent: req.headers.get("user-agent"),
+      resource: `/guilds/${guildId}/music/history/${parts[4]}`,
+      details: { historyId: Number(parts[4]), cacheFile: track.cacheFile },
+    });
+    return json({ ok: true, track });
   }
 
   if (req.method === "POST" && action === "playlists" && parts[4] && parts[5] === "activate") {

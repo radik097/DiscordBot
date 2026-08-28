@@ -130,6 +130,30 @@
     </div>
   </article>
 
+  <article class="panel" data-panel="cache-history" data-icon="🕘" data-title="История песен">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🕘</span>
+      <span class="panel-title">История песен</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="cached-history-header">
+        <div>
+          <h3>Закэшированные песни <span id="cachedHistoryCount" class="queue-count">0</span></h3>
+          <div class="hint">Только реально запущенные песни, чей аудиофайл ещё хранится в кэше. Повторный запуск не требует новой загрузки.</div>
+        </div>
+        <button id="refreshCachedHistory" title="Обновить историю">↻</button>
+      </div>
+      <div id="cachedHistoryError" class="errors"></div>
+      <div id="cachedMusicHistory" class="cached-music-history"></div>
+    </div>
+  </article>
+
   <article class="panel" data-panel="playlists" data-icon="💿" data-title="Плейлисты">
     <header class="panel-header">
       <span class="drag-handle" title="Перетащить">⠿</span>
@@ -383,6 +407,7 @@
     <button type="button" data-mobile-panel="members">👥 Участники</button>
     <button type="button" data-mobile-panel="stats">📊 Статистика</button>
     <button type="button" data-mobile-panel="history">🗒️ История</button>
+    <button type="button" data-mobile-panel="cache-history">🕘 История песен</button>
     <button type="button" data-mobile-panel="downloads">⬇️ Загрузки</button>
   </div>
 </div>

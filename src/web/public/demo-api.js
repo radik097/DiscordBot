@@ -84,6 +84,20 @@
     { author_tag: "SampleMod#0002", content: "Данные не загружаются из Discord API.", created_at: now() - 12 * 60 * 1000 },
     { author_tag: "ExampleGuest#0003", content: "Все действия выполняются только в памяти страницы.", created_at: now() - 4 * 60 * 1000 },
   ];
+  const cachedMusicHistory = tracks.slice(0, 3).map((track, index) => ({
+    id: index + 1,
+    cacheFile: `${String(index + 1).repeat(40)}.webm`,
+    url: track.url,
+    title: track.title,
+    durationSec: track.durationSec,
+    requestedBy: track.requestedBy,
+    sourceType: index === 0 ? "spotify-match" : null,
+    sourceService: index === 0 ? "spotify.com" : "youtube.com",
+    sizeBytes: 3_000_000 + index * 750_000,
+    firstPlayedAt: now() - (index + 3) * 60 * 60 * 1000,
+    lastPlayedAt: now() - (index + 1) * 20 * 60 * 1000,
+    playCount: index + 1,
+  }));
 
   let current = { queueId: "demo-track-1", title: "Aurora Lights — Demo Artist", durationSec: 222, requestedBy: "DemoUser", url: "https://example.invalid/aurora-lights" };
   let queue = copy(tracks);
@@ -172,6 +186,18 @@
     if (/^\/api\/guilds\/[^/]+\/members$/.test(path)) return json(copy(members));
 
     if (/^\/api\/music\/[^/]+$/.test(path) && method === "GET") return json(musicState());
+    if (/^\/api\/music\/[^/]+\/history$/.test(path) && method === "GET") return json({ tracks: copy(cachedMusicHistory) });
+    const cachedHistoryPlay = path.match(/^\/api\/music\/[^/]+\/history\/(\d+)\/play$/);
+    if (cachedHistoryPlay) {
+      const entry = cachedMusicHistory.find((item) => item.id === Number(cachedHistoryPlay[1]));
+      if (!entry) return json({ error: "Демо-песня не найдена в кэше." }, 404);
+      current = { ...copy(entry), queueId: `demo-history-${now()}`, requestedBy: "веб-панель" };
+      entry.playCount += 1;
+      entry.lastPlayedAt = now();
+      setElapsed(0);
+      paused = false;
+      return json({ ok: true, track: copy(current) });
+    }
     if (/^\/api\/music\/[^/]+\/play$/.test(path)) {
       const title = body.query?.trim() ? `Demo Track — ${body.query.trim().slice(0, 40)}` : "Demo Track";
       current = { queueId: `demo-track-${now()}`, title, durationSec: 210, requestedBy: "DemoUser", url: "https://example.invalid/demo-track" };

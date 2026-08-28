@@ -7,6 +7,7 @@ const state = {
   guildId: savedGuildId,
   config: null,
   playlists: [],
+  musicHistory: [],
   activePlaylistId: null,
   mobileQueueLimit: 20,
   csrfToken: null,
@@ -15,7 +16,7 @@ const state = {
 
 function applyStagingMode(enabled) {
   state.stagingMode = Boolean(enabled);
-  for (const panelName of ["music", "playlists", "voice"]) {
+  for (const panelName of ["music", "cache-history", "playlists", "voice"]) {
     const panel = document.querySelector(`[data-panel="${panelName}"]`);
     const mobileButton = document.querySelector(`[data-mobile-panel="${panelName}"]`);
     if (panel) panel.hidden = state.stagingMode;
@@ -349,7 +350,7 @@ document.getElementById("guildSelect").addEventListener("change", async (e) => {
   } catch {}
   lastQueueSignature = "";
   await settleTasks(
-    [loadStatus(), loadMusic(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()],
+    [loadStatus(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()],
     "guild-change",
   );
 });
@@ -893,6 +894,81 @@ document.getElementById("playlistNameForm").addEventListener("submit", async (ev
 
 document.getElementById("refreshPlaylists").addEventListener("click", () => void loadPlaylists());
 
+function renderMusicHistory(tracks) {
+  const root = document.getElementById("cachedMusicHistory");
+  root.innerHTML = "";
+  document.getElementById("cachedHistoryCount").textContent = tracks.length;
+  if (!tracks.length) {
+    const empty = document.createElement("div");
+    empty.className = "playlist-empty";
+    empty.textContent = "Закэшированных проигранных песен пока нет.";
+    root.appendChild(empty);
+    return;
+  }
+  for (const track of tracks) {
+    const card = document.createElement("div");
+    card.className = "cached-history-item";
+    const info = document.createElement("div");
+    info.className = "cached-history-info";
+    const title = document.createElement("strong");
+    title.textContent = track.title;
+    const meta = document.createElement("span");
+    const source = track.sourceService || (track.sourceType === "spotify-match" ? "Spotify → YouTube" : "кэш");
+    meta.textContent = `${fmtDuration(track.durationSec)} · ${formatBytes(track.sizeBytes)} · ${source} · запусков: ${track.playCount} · ${fmtTime(track.lastPlayedAt)}`;
+    info.append(title, meta);
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "cached-history-play";
+    play.dataset.historyId = track.id;
+    play.title = `Включить из кэша: ${track.title}`;
+    play.textContent = "▶ Включить";
+    card.append(info, play);
+    root.appendChild(card);
+  }
+}
+
+async function loadMusicHistory() {
+  if (!state.guildId) return;
+  const guildId = state.guildId;
+  try {
+    const { tracks } = await api(`/api/music/${guildId}/history`);
+    if (guildId !== state.guildId) return;
+    state.musicHistory = tracks;
+    renderMusicHistory(tracks);
+    document.getElementById("cachedHistoryError").textContent = "";
+  } catch (err) {
+    document.getElementById("cachedHistoryError").textContent = `Ошибка обновления: ${err.message}`;
+  }
+}
+
+document.getElementById("refreshCachedHistory").addEventListener("click", () => void loadMusicHistory());
+
+document.getElementById("cachedMusicHistory").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-history-id]");
+  if (!button) return;
+  const channelId = document.getElementById("musicChannel").value;
+  const error = document.getElementById("cachedHistoryError");
+  if (!channelId) {
+    error.textContent = "Выберите голосовой канал в панели «Музыка».";
+    return;
+  }
+  button.disabled = true;
+  try {
+    const result = await api(`/api/music/${state.guildId}/history/${encodeURIComponent(button.dataset.historyId)}/play`, {
+      method: "POST",
+      body: JSON.stringify({ channelId }),
+    });
+    error.textContent = `▶️ «${result.track.title}» добавлена из кэша`;
+    lastQueueSignature = "";
+    await loadMusic();
+  } catch (err) {
+    error.textContent = `Ошибка запуска: ${err.message}`;
+  } finally {
+    button.disabled = false;
+    void loadMusicHistory();
+  }
+});
+
 document.getElementById("savedPlaylists").addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-activate-playlist-id]");
   if (!button) return;
@@ -922,6 +998,7 @@ document.getElementById("savedPlaylists").addEventListener("click", async (event
 
 setInterval(() => loadMusic(), 1000);
 setInterval(() => void loadPlaylists(), 5000);
+setInterval(() => void loadMusicHistory(), 10000);
 
 // --- Voice ------------------------------------------------------------
 
@@ -1226,7 +1303,7 @@ document.getElementById("downloadsRefresh").addEventListener("click", () => {
     await loadAccessIdentity();
     await loadStatus();
     await settleTasks(
-      [loadConfigEditor(), loadMusic(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadDownloads()],
+      [loadConfigEditor(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadDownloads()],
       "boot",
     );
     await loadVoiceMembers();
