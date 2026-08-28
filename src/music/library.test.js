@@ -61,4 +61,23 @@ describe("saved playlist identities and playback state", () => {
       contentType: "video/mp4",
     });
   });
+
+  test("preserves a cached Cobalt source in a resume snapshot", async () => {
+    const cobalt = {
+      url: "https://soundcloud.com/artist/track",
+      title: "Artist Track",
+      durationSec: 180,
+      sourceType: "cobalt",
+      cacheFile: `cobalt-${"d".repeat(64)}.opus`,
+      sizeBytes: 4321,
+      contentType: "audio/opus",
+    };
+    expect(await savePlaylistPlaybackState(guildId, "playlist-a", [cobalt])).toBe(true);
+    expect((await getSavedPlaylist(guildId, "playlist-a")).playback.tracks[0]).toMatchObject({
+      sourceType: "cobalt",
+      cacheFile: cobalt.cacheFile,
+      sizeBytes: 4321,
+      contentType: "audio/opus",
+    });
+  });
 });

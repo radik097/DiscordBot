@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseStartTime, playlistUrlFromQuery, singleTrackQuery, startTimeFromUrl } from "./source.js";
+import { parseStartTime, playlistUrlFromQuery, resolveTrack, singleTrackQuery, startTimeFromUrl } from "./source.js";
 
 describe("music timestamps", () => {
   test("parses numeric, clock, and YouTube duration timestamps", () => {
@@ -29,5 +29,17 @@ describe("music timestamps", () => {
       .toBe("https://www.youtube.com/watch?v=5M9zMQXItqM&t=75");
     expect(() => singleTrackQuery("https://www.youtube.com/playlist?list=PL1234567890abcdef"))
       .toThrow("параметр `playlist`");
+  });
+
+  test("routes non-YouTube service links through Cobalt without changing text search", async () => {
+    const calls = [];
+    const track = await resolveTrack("https://soundcloud.com/artist/track", "tester", {
+      cobaltResolver: async (url, requestedBy) => {
+        calls.push({ url, requestedBy });
+        return { sourceType: "cobalt", url, title: "Track", requestedBy };
+      },
+    });
+    expect(track.sourceType).toBe("cobalt");
+    expect(calls).toEqual([{ url: "https://soundcloud.com/artist/track", requestedBy: "tester" }]);
   });
 });

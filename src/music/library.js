@@ -168,8 +168,8 @@ function playlistSnapshot(tracks) {
     startTimeSec: Math.max(0, Number(track.startTimeSec) || 0),
     thumbnail: track.thumbnail ?? null,
     requestedBy: track.requestedBy ?? null,
-    ...(track.sourceType === "attachment" ? {
-      sourceType: "attachment",
+    ...(["attachment", "cobalt"].includes(track.sourceType) ? {
+      sourceType: track.sourceType,
       cacheFile: track.cacheFile,
       sizeBytes: Number(track.sizeBytes) || null,
       contentType: track.contentType ?? null,
@@ -227,7 +227,7 @@ async function downloadTrack(job, index) {
   await persistJob(job);
 
   try {
-    if (track.sourceType === "attachment") {
+    if (["attachment", "cobalt"].includes(track.sourceType)) {
       const cached = await getAttachmentCacheEntry(track.cacheFile);
       track.status = "cached";
       track.cacheFile = cached.fileName;
@@ -311,8 +311,8 @@ export async function startPlaylistSave(guildId, tracks, title = "Текущий
       startTimeSec: Math.max(0, Number(track.startTimeSec) || 0),
       thumbnail: track.thumbnail ?? null,
       requestedBy: track.requestedBy ?? null,
-      ...(track.sourceType === "attachment" ? {
-        sourceType: "attachment",
+      ...(["attachment", "cobalt"].includes(track.sourceType) ? {
+        sourceType: track.sourceType,
         cacheFile: track.cacheFile,
         sizeBytes: Number(track.sizeBytes) || null,
         contentType: track.contentType ?? null,

@@ -28,6 +28,24 @@ describe("CobaltClient", () => {
     expect(JSON.parse(request.options.body)).toMatchObject({ alwaysProxy: true, downloadMode: "auto" });
   });
 
+  test("requests audio mode and prefers picker background audio", async () => {
+    let body;
+    const client = new CobaltClient({
+      fetchImpl: async (_url, options) => {
+        body = JSON.parse(options.body);
+        return Response.json({
+          status: "picker",
+          audio: "https://cdn.example.com/audio.opus",
+          audioFilename: "artist - title.opus",
+          picker: [{ type: "photo", url: "https://cdn.example.com/photo.jpg" }],
+        });
+      },
+    });
+    expect(await client.resolve("https://tiktok.com/example", { downloadMode: "audio", audioFormat: "best" }))
+      .toMatchObject({ url: "https://cdn.example.com/audio.opus", filename: "artist - title.opus" });
+    expect(body).toMatchObject({ downloadMode: "audio", audioFormat: "best", localProcessing: "disabled", alwaysProxy: true });
+  });
+
   test("selects the first playable picker item", async () => {
     const client = new CobaltClient({
       fetchImpl: async () => Response.json({ status: "picker", picker: [{ type: "photo", url: "https://cdn.example.com/1.jpg" }, { type: "video", url: "https://cdn.example.com/2.mp4" }] }),

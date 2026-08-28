@@ -38,8 +38,8 @@ async function checkAccess(interaction) {
 const play = {
   data: new SlashCommandBuilder()
     .setName("play")
-    .setDescription("Включить один трек, плейлист по ссылке или приложенный медиафайл")
-    .addStringOption((o) => o.setName("query").setDescription("Один трек: название или ссылка на видео").setRequired(false))
+    .setDescription("Включить трек из поиска, ссылки, плейлиста или файла")
+    .addStringOption((o) => o.setName("query").setDescription("Название, YouTube или ссылка сервиса, поддерживаемого Cobalt").setRequired(false))
     .addStringOption((o) => o.setName("playlist").setDescription("Ссылка на YouTube-плейлист").setRequired(false))
     .addAttachmentOption((o) => o.setName("file").setDescription("Аудио или видео; будет воспроизведена звуковая дорожка").setRequired(false)),
   async execute(interaction) {
@@ -100,7 +100,8 @@ const play = {
     }
 
     const [track] = resolved.tracks;
-    await interaction.editReply(`${wasIdle ? "▶️ Играю" : "➕ Добавлено в очередь"}: **${track.title}** (${formatDuration(track.durationSec)})`);
+    const via = track.sourceType === "cobalt" ? ` · Cobalt (${track.sourceService})` : "";
+    await interaction.editReply(`${wasIdle ? "▶️ Играю" : "➕ Добавлено в очередь"}: **${track.title}** (${formatDuration(track.durationSec)})${via}`);
   },
 };
 

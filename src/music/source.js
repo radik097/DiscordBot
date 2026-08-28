@@ -8,6 +8,7 @@ import { Transform } from "node:stream";
 import { StreamType } from "@discordjs/voice";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { isCobaltMusicUrl, resolveCobaltTrack } from "./cobaltSource.js";
 
 const YTDLP_PATH = (() => {
   for (const name of ["yt-dlp.exe", "yt-dlp"]) {
@@ -227,8 +228,9 @@ export function singleTrackQuery(query) {
   }
 }
 
-export async function resolveTrack(query, requestedBy) {
+export async function resolveTrack(query, requestedBy, { cobaltResolver = resolveCobaltTrack } = {}) {
   const trackQuery = singleTrackQuery(query);
+  if (isCobaltMusicUrl(trackQuery)) return cobaltResolver(trackQuery, requestedBy);
   const validated = await play.validate(trackQuery);
 
   if (validated === "yt_video") {
@@ -443,31 +445,31 @@ export async function getAudioCacheStats() {
   return { files: entries.length, totalMB: Number(formatMB(totalBytes)) };
 }
 
-async function resolveAttachmentCacheFile(cacheFile) {
+async function resolveLocalCacheFile(cacheFile) {
   const fileName = String(cacheFile ?? "");
-  if (path.basename(fileName) !== fileName || !/^upload-[a-f0-9]{64}\.[a-z0-9]{1,10}$/.test(fileName)) {
-    throw new Error("Некорректное имя кэшированного Discord-файла");
+  if (path.basename(fileName) !== fileName || !/^(?:upload|cobalt)-[a-f0-9]{64}\.[a-z0-9]{1,10}$/.test(fileName)) {
+    throw new Error("Некорректное имя локального медиафайла");
   }
   const file = path.join(CACHE_DIR, fileName);
   const info = await stat(file).catch(() => null);
-  if (!info?.isFile() || info.size <= 0) throw new Error("Кэшированный Discord-файл отсутствует");
+  if (!info?.isFile() || info.size <= 0) throw new Error("Кэшированный медиафайл отсутствует");
   return file;
 }
 
 export async function getAttachmentCacheEntry(cacheFile) {
-  const file = await resolveAttachmentCacheFile(cacheFile);
+  const file = await resolveLocalCacheFile(cacheFile);
   const info = await stat(file);
   return { file, fileName: path.basename(file), bytes: info.size, quality: "file" };
 }
 
 export async function getAudioStream(source, quality = "best", startTimeSec = 0) {
   let localFile;
-  if (source && typeof source === "object" && source.sourceType === "attachment") {
+  if (source && typeof source === "object" && ["attachment", "cobalt"].includes(source.sourceType)) {
     try {
-      localFile = await resolveAttachmentCacheFile(source.cacheFile);
+      localFile = await resolveLocalCacheFile(source.cacheFile);
       quality = "file";
     } catch (err) {
-      throw new Error(`Не удалось открыть Discord-файл: ${err.message}`);
+      throw new Error(`Не удалось открыть локальный медиафайл: ${err.message}`);
     }
   } else {
     const url = typeof source === "string" ? source : source?.url;

@@ -58,7 +58,7 @@ export class CobaltClient {
     this.fetch = fetchImpl;
   }
 
-  async resolve(sourceUrl, { signal } = {}) {
+  async resolve(sourceUrl, { signal, downloadMode = "auto", audioFormat, localProcessing = "disabled" } = {}) {
     const source = validatePublicMediaUrl(sourceUrl);
     const headers = { accept: "application/json", "content-type": "application/json" };
     if (this.apiKey) headers.authorization = `Api-Key ${this.apiKey}`;
@@ -67,9 +67,11 @@ export class CobaltClient {
       headers,
       body: JSON.stringify({
         url: source.toString(),
-        downloadMode: "auto",
+        downloadMode,
+        ...(audioFormat ? { audioFormat } : {}),
         filenameStyle: "basic",
         alwaysProxy: true,
+        localProcessing,
       }),
       signal,
     });
@@ -82,6 +84,9 @@ export class CobaltClient {
     }
     if (["tunnel", "redirect", "local-processing"].includes(payload.status) && payload.url) {
       return { status: payload.status, url: payload.url, filename: payload.filename || "download" };
+    }
+    if (payload.status === "picker" && downloadMode === "audio" && payload.audio) {
+      return { status: "picker", url: payload.audio, filename: payload.audioFilename || payload.filename || "audio", itemCount: payload.picker?.length || 1 };
     }
     if (payload.status === "picker" && Array.isArray(payload.picker) && payload.picker.length) {
       const selected = payload.picker.find((item) => item?.type === "video") ||

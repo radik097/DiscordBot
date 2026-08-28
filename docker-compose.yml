@@ -1,6 +1,6 @@
 services:
   discord-bot:
-    image: discord-bot:1.13.0
+    image: discord-bot:1.14.0
     container_name: discord-bot
     build:
       context: .
@@ -42,6 +42,8 @@ services:
       DOWNLOAD_COOLDOWN_MS: ${DOWNLOAD_COOLDOWN_MS:-30000}
       DOWNLOAD_LINK_TTL_MS: ${DOWNLOAD_LINK_TTL_MS:-1800000}
       DOWNLOAD_TIMEOUT_MS: ${DOWNLOAD_TIMEOUT_MS:-600000}
+      COBALT_MUSIC_MAX_BYTES: ${COBALT_MUSIC_MAX_BYTES:-209715200}
+      COBALT_MUSIC_TIMEOUT_MS: ${COBALT_MUSIC_TIMEOUT_MS:-600000}
 
     # Монтирование директорий для сохранения данных и конфига
     volumes:

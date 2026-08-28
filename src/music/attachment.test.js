@@ -149,6 +149,25 @@ describe("Discord media attachments", () => {
     }
   });
 
+  test("FFmpeg plays a cached Cobalt audio source", async () => {
+    const cacheFile = `cobalt-${"e".repeat(64)}.wav`;
+    const filePath = path.join(AUDIO_CACHE_DIR, cacheFile);
+    await writeFile(filePath, wavSilence(0.2));
+    let child;
+    let stream;
+    try {
+      const result = await getAudioStream({ sourceType: "cobalt", cacheFile }, "best", 0);
+      child = result.process;
+      stream = result.stream;
+      expect(result.quality).toBe("file");
+      expect(result.stats.bytesOut).toBeGreaterThan(0);
+    } finally {
+      stream?.destroy();
+      if (child && !child.killed) child.kill("SIGTERM");
+      await rm(filePath, { force: true });
+    }
+  });
+
   test("extracts the audio track from a video container", async () => {
     const cacheFile = `upload-${"b".repeat(64)}.mp4`;
     const filePath = path.join(AUDIO_CACHE_DIR, cacheFile);
