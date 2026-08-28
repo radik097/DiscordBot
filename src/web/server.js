@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { extname, resolve as resolvePath, sep } from "node:path";
+import { Readable } from "node:stream";
 import { loadConfig, saveConfig, validateConfig, buildStructure, wipeStructure, rebuildStructure } from "../structureManager.js";
 import { getQueue, peekQueue, volumePercentToRatio } from "../music/queue.js";
 import { resolveInput } from "../music/source.js";
@@ -25,6 +26,7 @@ import { registerRemoteAccess, unregisterRemoteAccess } from "./remoteAccessRegi
 import { AccessControl, verifyTrustedIdentity } from "./accessControl.js";
 import { registerAccessControl, unregisterAccessControl } from "./accessControlRegistry.js";
 import { downloadService } from "../downloads/service.js";
+import { getPreparedMusicMonitor, prepareMusicMonitorTrack, startMusicMonitor } from "../music/monitor.js";
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const PUBLIC_ROOT = resolvePath(PUBLIC_DIR.pathname.replace(/^\/([A-Za-z]:)/, "$1"));
@@ -449,6 +451,60 @@ async function handleMusic(req, parts, client, auth, mutateHeaders) {
     const playlist = await getSavedPlaylist(guildId, manifestId).catch(() => null);
     if (!playlist) return json({ error: "Сохранённый плейлист не найден" }, { status: 404 });
     return json({ playlist });
+  }
+
+  if (req.method === "POST" && action === "monitor" && parts[4] === "prepare") {
+    const { query } = await readJson(req);
+    if (!String(query ?? "").trim()) return json({ error: "Укажите трек или ссылку для мониторинга" }, { status: 400 });
+    let resolved;
+    try {
+      resolved = await resolveInput(String(query).trim(), "веб-монитор");
+    } catch (error) {
+      return json({ error: `Не удалось подготовить мониторинг: ${error.message}` }, { status: 400 });
+    }
+    const track = resolved.tracks?.[0];
+    if (!track) return json({ error: "Не найден доступный трек для мониторинга" }, { status: 404 });
+    try {
+      const prepared = await prepareMusicMonitorTrack({ key: `${guildId}:${auth.sessionId}`, track });
+      return json({ ok: true, kind: resolved.kind, ...prepared });
+    } catch (error) {
+      return json({ error: `Не удалось закэшировать трек для мониторинга: ${error.message}` }, { status: 409 });
+    }
+  }
+
+  if (req.method === "GET" && action === "monitor") {
+    const requestUrl = new URL(req.url);
+    const monitorKey = `${guildId}:${auth.sessionId}`;
+    const sourceId = requestUrl.searchParams.get("source");
+    const queue = peekQueue(guildId);
+    const prepared = sourceId ? getPreparedMusicMonitor(monitorKey, sourceId) : null;
+    const source = prepared
+      ? {
+          file: prepared.file,
+          offsetSec: 0,
+          volume: volumePercentToRatio(requestUrl.searchParams.get("volume")) ?? 1,
+        }
+      : sourceId
+        ? null
+        : queue?.getMonitorSource();
+    if (!source) return json({ error: "Сейчас нет активного закэшированного трека для мониторинга" }, { status: 409 });
+    let monitor;
+    try {
+      monitor = await startMusicMonitor({
+        key: monitorKey,
+        ...source,
+      });
+    } catch (error) {
+      return json({ error: `Не удалось запустить мониторинг: ${error.message}` }, { status: 409 });
+    }
+    req.signal.addEventListener("abort", monitor.stop, { once: true });
+    const headers = buildSecurityHeaders({
+      "content-type": monitor.contentType,
+      "cache-control": "private, no-store, max-age=0",
+      "content-disposition": "inline",
+      "x-content-type-options": "nosniff",
+    });
+    return new Response(Readable.toWeb(monitor.stream), { headers });
   }
 
   if (req.method === "GET" && action === "history") {

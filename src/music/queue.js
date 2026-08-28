@@ -60,6 +60,7 @@ class GuildQueue {
     this.idleTimer = null;
     this.currentProcess = null;
     this.currentResource = null;
+    this.currentLocalFile = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     this.playbackOffsetSec = 0;
@@ -160,6 +161,7 @@ class GuildQueue {
     this.playGeneration += 1;
     this.killCurrentProcess();
     this.currentResource = null;
+    this.currentLocalFile = null;
     this.currentStreamStats = null;
     this.playbackOffsetSec = 0;
     this.player.stop(true);
@@ -351,6 +353,7 @@ class GuildQueue {
     const generation = ++this.playGeneration;
     this.killCurrentProcess();
     this.currentResource = null;
+    this.currentLocalFile = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     const next = this.tracks.shift();
@@ -385,6 +388,7 @@ class GuildQueue {
       if (!resource.volume) throw new Error("Voice runtime не создал регулятор громкости");
       resource.volume.setVolume(this.volume);
       this.currentResource = resource;
+      this.currentLocalFile = localFile;
       this.player.play(resource);
       try {
         await recordCachedTrack(this.guildId, next, localFile);
@@ -453,6 +457,17 @@ class GuildQueue {
     return normalized;
   }
 
+  getMonitorSource() {
+    if (!this.playing || !this.currentLocalFile) return null;
+    return {
+      file: this.currentLocalFile,
+      queueId: this.playing.queueId,
+      title: this.playing.title,
+      offsetSec: this.currentElapsedSec(),
+      volume: this.volume,
+    };
+  }
+
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -463,6 +478,7 @@ class GuildQueue {
     this.tracks = [];
     this.playing = null;
     this.currentResource = null;
+    this.currentLocalFile = null;
     this.currentStreamStats = null;
     this.currentQuality = null;
     this.playbackOffsetSec = 0;

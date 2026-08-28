@@ -110,6 +110,15 @@
         <button id="musicSkip">⏭️ Скип</button>
         <button id="musicStop" class="danger">⏹️ Стоп</button>
         <label>Громкость <input type="range" id="musicVolume" min="0" max="200" value="100" /> <span id="musicVolumeLabel">100%</span></label>
+        <button id="musicMonitorToggle" type="button">🎧 Включить мониторинг</button>
+      </div>
+      <div id="musicMonitor" class="card music-monitor" hidden>
+        <div>
+          <strong>Прямой монитор</strong>
+          <span id="musicMonitorStatus" class="hint">Ожидание активного трека.</span>
+        </div>
+        <audio id="musicMonitorAudio" controls preload="none"></audio>
+        <small class="hint">Укажите трек в поле выше и нажмите «Слушать», либо включите монитор для текущего трека. Поток идёт из локального кэша напрямую в браузер — без Discord Voice.</small>
       </div>
       <div class="music-queue-header">
         <h3>Очередь <span id="musicQueueCount" class="queue-count">0</span></h3>

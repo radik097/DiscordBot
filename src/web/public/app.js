@@ -343,6 +343,7 @@ async function settleTasks(tasks, context) {
 }
 
 document.getElementById("guildSelect").addEventListener("change", async (e) => {
+  disableMusicMonitor("Мониторинг выключен после смены сервера.");
   state.guildId = e.target.value;
   state.playlists = [];
   const playlistDialog = document.getElementById("playlistNameDialog");
@@ -433,10 +434,20 @@ async function loadMusicChannels() {
 
 document.getElementById("musicPlay").addEventListener("click", async () => {
   const errEl = document.getElementById("musicError");
-  const channelId = document.getElementById("musicChannel").value;
   const query = document.getElementById("musicQuery").value.trim();
-  if (!channelId) return (errEl.textContent = "На сервере нет голосовых каналов.");
   if (!query) return (errEl.textContent = "Вставь ссылку на YouTube или запрос.");
+  if (musicMonitorEnabled) {
+    errEl.textContent = "Готовлю трек для прослушивания в браузере...";
+    try {
+      await prepareBrowserMonitor(query);
+      document.getElementById("musicQuery").value = "";
+    } catch (err) {
+      errEl.textContent = "Ошибка мониторинга: " + err.message;
+    }
+    return;
+  }
+  const channelId = document.getElementById("musicChannel").value;
+  if (!channelId) return (errEl.textContent = "На сервере нет голосовых каналов.");
   errEl.textContent = "Обрабатываю трек или плейлист...";
   try {
     const result = await api(`/api/music/${state.guildId}/play`, { method: "POST", body: JSON.stringify({ query, channelId }) });
@@ -473,6 +484,112 @@ const VOICE_STATE_LABELS = {
   disconnected: "Отключено",
   destroyed: "Завершено",
 };
+
+const musicMonitor = document.getElementById("musicMonitor");
+const musicMonitorAudio = document.getElementById("musicMonitorAudio");
+const musicMonitorButton = document.getElementById("musicMonitorToggle");
+const musicMonitorStatus = document.getElementById("musicMonitorStatus");
+let musicMonitorEnabled = false;
+let musicMonitorSignature = "";
+let latestMusicSnapshot = null;
+let preparedMusicMonitor = null;
+
+function releaseMonitorAudio() {
+  musicMonitorAudio.pause();
+  musicMonitorAudio.removeAttribute("src");
+  musicMonitorAudio.load();
+  musicMonitorSignature = "";
+}
+
+function disableMusicMonitor(message = "Мониторинг выключен.") {
+  musicMonitorEnabled = false;
+  preparedMusicMonitor = null;
+  releaseMonitorAudio();
+  musicMonitor.hidden = true;
+  musicMonitorButton.textContent = "🎧 Включить мониторинг";
+  musicMonitorButton.classList.remove("primary");
+  musicMonitorStatus.textContent = message;
+  document.getElementById("musicChannel").disabled = false;
+  document.getElementById("musicPlay").textContent = "▶️ Включить";
+}
+
+async function prepareBrowserMonitor(query) {
+  const prepared = await api(`/api/music/${state.guildId}/monitor/prepare`, {
+    method: "POST",
+    body: JSON.stringify({ query }),
+  });
+  preparedMusicMonitor = {
+    sourceId: prepared.sourceId,
+    track: prepared.track,
+    expiresAt: prepared.expiresAt,
+    volumePercent: Number(document.getElementById("musicVolume").value) || 0,
+  };
+  musicMonitorSignature = "";
+  document.getElementById("musicError").textContent = `✅ «${prepared.track.title}» готов к прослушиванию без Discord`;
+  await syncMusicMonitor(latestMusicSnapshot);
+}
+
+async function syncMusicMonitor(data) {
+  if (!musicMonitorEnabled) return;
+  const track = preparedMusicMonitor?.track ?? data?.playing;
+  const preparedSourceId = preparedMusicMonitor?.sourceId;
+  if (!preparedSourceId && !track?.queueId) {
+    if (musicMonitorAudio.hasAttribute("src")) releaseMonitorAudio();
+    musicMonitorStatus.textContent = "Введите трек или ссылку и нажмите «Слушать».";
+    return;
+  }
+
+  const volumePercent = preparedSourceId
+    ? preparedMusicMonitor.volumePercent
+    : Math.round((Number(data?.volume) || 0) * 100);
+  const trackKey = preparedSourceId ?? track.queueId;
+  const signature = `${state.guildId}:${trackKey}:${volumePercent}`;
+  if (signature === musicMonitorSignature) return;
+  musicMonitorSignature = signature;
+  const params = new URLSearchParams({
+    volume: String(volumePercent),
+    nonce: String(Date.now()),
+  });
+  if (preparedSourceId) params.set("source", preparedSourceId);
+  else params.set("track", track.queueId);
+  musicMonitorAudio.src = `/api/music/${encodeURIComponent(state.guildId)}/monitor?${params}`;
+  musicMonitorAudio.volume = 1;
+  musicMonitorAudio.load();
+  musicMonitorStatus.textContent = `Подключение к «${track.title}» с громкостью ${volumePercent}%…`;
+  try {
+    await musicMonitorAudio.play();
+    musicMonitorStatus.textContent = `Слушаете «${track.title}» · серверная громкость ${volumePercent}%`;
+  } catch {
+    musicMonitorStatus.textContent = `Поток готов · громкость ${volumePercent}%. Нажмите ▶ в плеере.`;
+  }
+}
+
+musicMonitorButton.addEventListener("click", () => {
+  if (musicMonitorEnabled) {
+    disableMusicMonitor();
+    return;
+  }
+  musicMonitorEnabled = true;
+  musicMonitor.hidden = false;
+  musicMonitorButton.textContent = "🎧 Выключить мониторинг";
+  musicMonitorButton.classList.add("primary");
+  document.getElementById("musicChannel").disabled = true;
+  document.getElementById("musicPlay").textContent = "🎧 Слушать";
+  if (window.DISCORD_BOT_DEMO) {
+    musicMonitorStatus.textContent = "Прямой аудиопоток недоступен в демо-режиме.";
+    return;
+  }
+  void syncMusicMonitor(latestMusicSnapshot);
+});
+
+musicMonitorAudio.addEventListener("playing", () => {
+  if (musicMonitorEnabled) musicMonitorStatus.textContent = "Прямой поток активен · воспроизведение";
+});
+musicMonitorAudio.addEventListener("error", () => {
+  if (musicMonitorEnabled && musicMonitorAudio.hasAttribute("src")) {
+    musicMonitorStatus.textContent = "Не удалось открыть прямой поток. Повторите подготовку трека.";
+  }
+});
 
 let musicLoadInFlight = false;
 let lastQueueSignature = "";
@@ -649,6 +766,7 @@ async function loadMusic() {
     const requestedGuildId = state.guildId;
     const data = await api(`/api/music/${requestedGuildId}`);
     if (requestedGuildId !== state.guildId) return;
+    latestMusicSnapshot = data;
     const title = document.getElementById("nowPlayingTitle");
     const progressArea = document.getElementById("musicProgressArea");
 
@@ -731,10 +849,15 @@ async function loadMusic() {
     renderPlaylistSave(data.playlistSave, Boolean(data.playing || data.tracks.length));
 
     const vol = document.getElementById("musicVolume");
-    if (document.activeElement !== vol) vol.value = Math.round((data.volume ?? 1) * 100);
+    if (document.activeElement !== vol) {
+      vol.value = preparedMusicMonitor
+        ? preparedMusicMonitor.volumePercent
+        : Math.round((data.volume ?? 1) * 100);
+    }
     document.getElementById("musicVolumeLabel").textContent = `${vol.value}%`;
     const musicError = document.getElementById("musicError");
     if (musicError.textContent.startsWith("Ошибка обновления:")) musicError.textContent = "";
+    void syncMusicMonitor(data);
   } catch (err) {
     document.getElementById("musicError").textContent = "Ошибка обновления: " + err.message;
   } finally {
@@ -779,6 +902,15 @@ async function flushHostVolume() {
     while (pendingHostVolume !== null) {
       const requestedLevel = pendingHostVolume;
       pendingHostVolume = null;
+      if (musicMonitorEnabled && preparedMusicMonitor) {
+        preparedMusicMonitor.volumePercent = requestedLevel;
+        musicMonitorSignature = "";
+        await syncMusicMonitor(latestMusicSnapshot);
+        if (pendingHostVolume === null) {
+          document.getElementById("musicError").textContent = `🎧 Громкость монитора применена: ${requestedLevel}%`;
+        }
+        continue;
+      }
       const result = await musicAction("volume", { level: requestedLevel });
       if (!result) continue;
       const appliedLevel = Math.round((Number(result.volume) || 0) * 100);

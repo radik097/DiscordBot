@@ -5,6 +5,11 @@ import { startWebServer } from "./server.js";
 import { downloadService } from "../downloads/service.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import ffmpegPath from "ffmpeg-static";
+import { spawnSync } from "node:child_process";
+import { rm } from "node:fs/promises";
+import { getQueue } from "../music/queue.js";
+import { AUDIO_CACHE_DIR } from "../music/source.js";
 
 const SECRET = "integration-project-identity-secret-long-enough";
 const OWNER = "rodionaustralia@gmail.com";
@@ -75,6 +80,35 @@ describe("web email access integration", () => {
     expect(response.headers.get("content-disposition")).toContain("filename*=UTF-8''");
     expect(await response.text()).toBe("download payload");
     downloadService.cleanupExpired(link.expiresAt + 1);
+  });
+
+  test("streams the current cached track through the authenticated monitor endpoint", async () => {
+    const guildId = `monitor-${crypto.randomUUID()}`;
+    const filePath = join(AUDIO_CACHE_DIR, `${guildId}.wav`);
+    const generated = spawnSync(ffmpegPath, [
+      "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000",
+      "-t", "0.2", "-ac", "2", filePath,
+    ]);
+    expect(generated.status).toBe(0);
+    const queue = getQueue(guildId);
+    queue.playing = { queueId: crypto.randomUUID(), title: "Monitor fixture" };
+    queue.currentLocalFile = filePath;
+    queue.volume = 0.5;
+
+    try {
+      const owner = await fetch(`${base}/`, { redirect: "manual" });
+      const response = await fetch(`${base}/api/music/${guildId}/monitor`, {
+        headers: { cookie: cookieFrom(owner) },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("audio/mpeg");
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(100);
+    } finally {
+      queue.destroy();
+      await rm(filePath, { force: true });
+    }
   });
 
   test("owner activity blocks a guest mutation but not guest reads", async () => {
