@@ -1,7 +1,7 @@
 import { MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { loadConfig } from "../structureManager.js";
 import { validatePublicMediaUrl } from "../downloads/cobalt.js";
-import { downloadService } from "../downloads/service.js";
+import { downloadService, VIDEO_QUALITIES } from "../downloads/service.js";
 
 const DEFAULT_ALLOWED_ROLES = ["Ботоводство"];
 const normalized = (value) => String(value ?? "").trim().toLocaleLowerCase("ru-RU");
@@ -19,9 +19,20 @@ export function canUseDownload(interaction, config = {}) {
 export function createDownloadCommand(service = downloadService, configLoader = loadConfig) {
   const data = new SlashCommandBuilder()
     .setName("download")
-    .setDescription("Скачать публичное медиа по ссылке")
+    .setDescription("Скачать видео или аудио с публичного сайта")
     .setDMPermission(false)
-    .addStringOption((option) => option.setName("url").setDescription("Публичная ссылка на медиа").setRequired(true));
+    .addStringOption((option) => option.setName("url").setDescription("Публичная ссылка на видео или публикацию").setRequired(true))
+    .addStringOption((option) => option
+      .setName("format")
+      .setDescription("Что сохранить")
+      .addChoices(
+        { name: "Видео со звуком", value: "video" },
+        { name: "Только аудио", value: "audio" },
+      ))
+    .addStringOption((option) => option
+      .setName("quality")
+      .setDescription("Максимальное качество видео")
+      .addChoices(...VIDEO_QUALITIES.map((quality) => ({ name: quality === "max" ? "Максимальное" : `${quality}p`, value: quality }))));
 
   async function execute(interaction) {
     const config = configLoader();
@@ -29,6 +40,8 @@ export function createDownloadCommand(service = downloadService, configLoader = 
       return interaction.reply({ content: "Команда доступна только администратору или разрешённой роли.", flags: MessageFlags.Ephemeral });
     }
     const sourceUrl = interaction.options.getString("url", true);
+    const format = interaction.options.getString("format") || "video";
+    const quality = interaction.options.getString("quality") || "720";
     try { validatePublicMediaUrl(sourceUrl); }
     catch (error) { return interaction.reply({ content: error.message, flags: MessageFlags.Ephemeral }); }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -39,12 +52,14 @@ export function createDownloadCommand(service = downloadService, configLoader = 
         userId: interaction.user.id,
         userTag: interaction.user.tag,
         sourceUrl,
+        format,
+        quality,
       });
       const discordLimit = Math.max(1, Number(interaction.attachmentSizeLimit) || 10 * 1024 * 1024);
       if (result.size <= discordLimit) {
         try {
           await interaction.editReply({
-            content: result.itemCount > 1 ? `Cobalt вернул ${result.itemCount} файлов; отправлен первый.` : "Готово.",
+            content: result.itemCount > 1 ? `Cobalt вернул ${result.itemCount} файлов; отправлен первый.` : `${format === "audio" ? "Аудио" : "Видео"} готово.`,
             files: [{ attachment: result.path, name: result.filename }],
           });
         } finally {

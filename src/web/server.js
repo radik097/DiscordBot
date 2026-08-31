@@ -54,6 +54,7 @@ const roleByRoute = [
   { path: ["/api/config", "/api/config/build", "/api/config/wipe", "/api/config/rebuild"], method: "POST", roles: ["admin"] },
   { path: ["/api/moderation"], method: "POST", roles: ["admin"] },
   { path: ["/api/music", "/api/voice", "/api/remote-access"], method: "POST", roles: ["admin"] },
+  { path: ["/api/downloads"], method: "POST", roles: ["admin"] },
   { path: ["/api/music"], method: "DELETE", roles: ["admin"] },
 ];
 
@@ -807,10 +808,31 @@ async function handleRemoteAccess(req, url, remote) {
   return notFound();
 }
 
-async function handleDownloads(req, url) {
-  if (req.method !== "GET") return notAllowed("Загрузки в панели доступны только для чтения");
-  const guildId = url.searchParams.get("guildId") || undefined;
-  return json(downloadService.status(loadConfig(), guildId));
+async function handleDownloads(req, url, auth, downloads) {
+  if (req.method === "GET") {
+    const guildId = url.searchParams.get("guildId") || undefined;
+    return json(downloads.status(loadConfig(), guildId));
+  }
+  if (req.method === "POST") {
+    const body = await readJson(req);
+    const guildId = String(body.guildId || "").trim();
+    if (!guildId) return json({ error: "Выберите Discord-сервер." }, { status: 400 });
+    try {
+      const queued = downloads.startPublic({
+        guildId,
+        channelId: null,
+        userId: `panel:${auth.sessionId}`,
+        userTag: auth.accessSession?.email || "Веб-панель",
+        sourceUrl: body.url,
+        format: body.format,
+        quality: body.quality,
+      });
+      return json({ ok: true, id: queued.id, status: "queued" }, { status: 202 });
+    } catch (error) {
+      return json({ error: error.message }, { status: 400 });
+    }
+  }
+  return notAllowed("Разрешены только GET и POST");
 }
 
 async function handleAccessApi(req, url, access, context) {
@@ -863,7 +885,7 @@ async function handleAccessApi(req, url, access, context) {
   return notFound();
 }
 
-async function handleApi(req, url, client, remote, access, context) {
+async function handleApi(req, url, client, remote, access, context, downloads) {
   const parts = url.pathname.split("/").filter(Boolean);
   const resource = parts[1];
   const headers = new Headers(buildSecurityHeaders());
@@ -887,7 +909,7 @@ async function handleApi(req, url, client, remote, access, context) {
   if (resource === "guilds") return await handleGuildInfo(req, parts, client, context);
   if (resource === "stats") return await handleStats(req, parts, context);
   if (resource === "history") return await handleHistory(req, url, parts, context);
-  if (resource === "downloads") return await handleDownloads(req, url);
+  if (resource === "downloads") return await handleDownloads(req, url, context, downloads);
   if (resource === "csrf" && req.method === "GET") {
     if (!context?.csrf) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
     return json({ token: context.csrf }, { headers: Object.fromEntries(headers) });
@@ -947,7 +969,11 @@ function buildSessionContext(req, remoteAuth, headers, accessSession = null, for
   };
 }
 
-export function startWebServer(client, port = 8787, { accessControl = null, identitySecret = process.env.PROJECT_IDENTITY_SECRET || "" } = {}) {
+export function startWebServer(client, port = 8787, {
+  accessControl = null,
+  identitySecret = process.env.PROJECT_IDENTITY_SECRET || "",
+  downloads = downloadService,
+} = {}) {
   const remote = new RemoteAccess({ port });
   const access = accessControl || new AccessControl({ publicBaseUrl: process.env.ACCESS_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL });
   registerRemoteAccess(client, remote);
@@ -983,7 +1009,7 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
       const downloadMatch = url.pathname.match(/^\/downloads\/([A-Za-z0-9_-]{40,})\/[^/]+$/);
       if (downloadMatch) {
         if (req.method !== "GET" && req.method !== "HEAD") return notAllowed("Разрешены только GET и HEAD");
-        const item = downloadService.takePublicFile(downloadMatch[1]);
+        const item = downloads.takePublicFile(downloadMatch[1]);
         if (!item) return new Response("Ссылка истекла или недействительна.", { status: 404, headers });
         const file = Bun.file(item.path);
         if (!(await file.exists())) return new Response("Файл больше недоступен.", { status: 404, headers });
@@ -1093,7 +1119,7 @@ export function startWebServer(client, port = 8787, { accessControl = null, iden
 
         if (url.pathname.startsWith("/api")) {
           if (!context && !local && !remoteAuth) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
-          const apiResponse = await handleApi(req, url, client, remote, access, context);
+          const apiResponse = await handleApi(req, url, client, remote, access, context, downloads);
           if (apiResponse) {
             if (apiResponse instanceof Response) {
               const next = new Headers(apiResponse.headers);

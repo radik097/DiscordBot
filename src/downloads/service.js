@@ -2,16 +2,32 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, extname, resolve as resolvePath, sep } from "node:path";
 import { once } from "node:events";
-import { CobaltClient, sanitizeSourceUrl } from "./cobalt.js";
+import { CobaltClient, sanitizeSourceUrl, validatePublicMediaUrl } from "./cobalt.js";
 import { createDownloadRecord, listDownloadRecords, updateDownloadRecord } from "../db.js";
 
 const DOWNLOAD_ROOT = new URL("../../data/downloads/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 const DEFAULT_MAX_BYTES = 500 * 1024 * 1024;
 const DEFAULT_TTL_MS = 30 * 60_000;
+export const DOWNLOAD_FORMATS = Object.freeze(["video", "audio"]);
+export const VIDEO_QUALITIES = Object.freeze(["480", "720", "1080", "1440", "2160", "max"]);
 
 function positiveNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function normalizeDownloadOptions({ format = "video", quality = "720" } = {}) {
+  const normalizedFormat = String(format || "video").toLowerCase();
+  if (!DOWNLOAD_FORMATS.includes(normalizedFormat)) throw new Error("Формат должен быть video или audio.");
+  const normalizedQuality = String(quality || "720").toLowerCase();
+  if (!VIDEO_QUALITIES.includes(normalizedQuality)) throw new Error("Выберите поддерживаемое качество видео.");
+  return {
+    format: normalizedFormat,
+    quality: normalizedQuality,
+    cobalt: normalizedFormat === "audio"
+      ? { downloadMode: "audio", audioFormat: "best" }
+      : { downloadMode: "auto", videoQuality: normalizedQuality, youtubeVideoCodec: "h264", youtubeVideoContainer: "mp4" },
+  };
 }
 
 export function safeFilename(value, contentType = "") {
@@ -75,10 +91,21 @@ export class DownloadService {
         ...this.pending.map(({ job }) => ({ ...job, status: "queued" })),
       ].filter((job) => !guildId || job.guildId === guildId),
       history: listDownloadRecords({ guildId, limit: 100 }),
+      available: [...this.links.entries()]
+        .filter(([, item]) => !guildId || item.guildId === guildId)
+        .map(([token, item]) => ({
+          id: item.id,
+          filename: item.filename,
+          size: item.size,
+          expiresAt: item.expiresAt,
+          url: `${this.publicBaseUrl}/downloads/${token}/${encodeURIComponent(item.filename)}`,
+        })),
     };
   }
 
-  async run({ guildId, channelId, userId, userTag, sourceUrl }) {
+  enqueue({ guildId, channelId, userId, userTag, sourceUrl, format = "video", quality = "720" }) {
+    const publicSourceUrl = validatePublicMediaUrl(sourceUrl).toString();
+    const options = normalizeDownloadOptions({ format, quality });
     const now = Date.now();
     const last = this.cooldowns.get(userId) || 0;
     if (now - last < this.cooldownMs) {
@@ -88,12 +115,38 @@ export class DownloadService {
     if (this.pending.length >= this.maxQueue) throw new Error("Очередь загрузок заполнена. Попробуйте позже.");
     this.cooldowns.set(userId, now);
     const id = randomUUID();
-    const job = { id, guildId, channelId, userId, userTag, sourceHost: new URL(sourceUrl).hostname, createdAt: now };
-    createDownloadRecord({ ...job, sourceUrl: sanitizeSourceUrl(sourceUrl), status: "queued" });
-    return new Promise((resolve, reject) => {
-      this.pending.push({ job, sourceUrl, resolve, reject });
+    const job = {
+      id, guildId, channelId, userId, userTag,
+      sourceHost: new URL(publicSourceUrl).hostname,
+      format: options.format,
+      quality: options.quality,
+      createdAt: now,
+    };
+    createDownloadRecord({ ...job, sourceUrl: sanitizeSourceUrl(publicSourceUrl), status: "queued" });
+    const completion = new Promise((resolve, reject) => {
+      this.pending.push({ job, sourceUrl: publicSourceUrl, options, resolve, reject });
       this.#pump();
     });
+    return { id, completion };
+  }
+
+  run(request) {
+    return this.enqueue(request).completion;
+  }
+
+  startPublic(request) {
+    if (!this.publicBaseUrl) throw new Error("Публичный адрес для загрузок не настроен.");
+    const queued = this.enqueue(request);
+    let completedResult = null;
+    void queued.completion.then((result) => {
+      completedResult = result;
+      this.createPublicLink({ ...result, guildId: request.guildId });
+    }).catch((error) => {
+      if (!completedResult) return;
+      this.remove(completedResult.path);
+      updateDownloadRecord(completedResult.id, { status: "error", error: error.message, completedAt: Date.now() });
+    });
+    return { id: queued.id };
   }
 
   #pump() {
@@ -107,13 +160,13 @@ export class DownloadService {
     }
   }
 
-  async #execute({ job, sourceUrl }) {
+  async #execute({ job, sourceUrl, options }) {
     updateDownloadRecord(job.id, { status: "processing", startedAt: Date.now() });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), positiveNumber(process.env.DOWNLOAD_TIMEOUT_MS, 10 * 60_000));
     let path = null;
     try {
-      const resolved = await this.cobalt.resolve(sourceUrl, { signal: controller.signal });
+      const resolved = await this.cobalt.resolve(sourceUrl, { signal: controller.signal, ...options.cobalt });
       const resultUrl = this.cobalt.validateResultUrl(resolved.url);
       const response = await this.#fetchResult(resultUrl, controller.signal);
       if (!response.ok || !response.body) throw new Error(`Не удалось получить файл (HTTP ${response.status}).`);

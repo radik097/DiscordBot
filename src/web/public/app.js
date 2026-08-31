@@ -1393,6 +1393,15 @@ const DOWNLOAD_STATUS = {
   queued: "в очереди", processing: "скачивается", ready: "готово",
   linked: "выдана ссылка", error: "ошибка",
 };
+let downloadPollTimer = null;
+
+function scheduleDownloadRefresh() {
+  if (downloadPollTimer) return;
+  downloadPollTimer = setTimeout(() => {
+    downloadPollTimer = null;
+    void loadDownloads().catch((err) => console.warn("[downloads]", err));
+  }, 3000);
+}
 
 async function loadDownloads() {
   const suffix = state.guildId ? `?guildId=${encodeURIComponent(state.guildId)}` : "";
@@ -1424,6 +1433,7 @@ async function loadDownloads() {
     : "Очередь пуста.";
   const body = document.getElementById("downloadHistory");
   body.innerHTML = "";
+  const available = new Map((data.available || []).map((item) => [item.id, item]));
   for (const item of data.history) {
     const row = document.createElement("tr");
     for (const value of [fmtTime(item.createdAt), item.userTag || item.userId, item.sourceHost, DOWNLOAD_STATUS[item.status] || item.status, formatBytes(item.sizeBytes)]) {
@@ -1431,10 +1441,58 @@ async function loadDownloads() {
       cell.textContent = value;
       row.appendChild(cell);
     }
+    const fileCell = document.createElement("td");
+    const ready = available.get(item.id);
+    if (ready) {
+      const link = document.createElement("a");
+      link.href = ready.url;
+      link.textContent = "Скачать";
+      link.title = `${ready.filename} · ссылка до ${fmtTime(ready.expiresAt)}`;
+      fileCell.appendChild(link);
+    } else {
+      fileCell.textContent = "—";
+    }
+    row.appendChild(fileCell);
     if (item.error) row.title = item.error;
     body.appendChild(row);
   }
+  if (data.queue.length) scheduleDownloadRefresh();
 }
+
+const downloadFormat = document.getElementById("downloadFormat");
+const downloadQuality = document.getElementById("downloadQuality");
+downloadFormat.addEventListener("change", () => {
+  downloadQuality.disabled = downloadFormat.value === "audio";
+});
+
+document.getElementById("downloadForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const result = document.getElementById("downloadResult");
+  const submit = document.getElementById("downloadSubmit");
+  const url = document.getElementById("downloadUrl").value.trim();
+  if (!state.guildId) return (result.textContent = "Сначала выберите Discord-сервер.");
+  if (!url) return (result.textContent = "Вставьте ссылку на публичное видео.");
+  submit.disabled = true;
+  result.textContent = "Добавляю загрузку в очередь…";
+  try {
+    const queued = await api("/api/downloads", {
+      method: "POST",
+      body: JSON.stringify({
+        guildId: state.guildId,
+        url,
+        format: downloadFormat.value,
+        quality: downloadQuality.value,
+      }),
+    });
+    document.getElementById("downloadUrl").value = "";
+    result.textContent = `✅ Загрузка ${queued.id.slice(0, 8)} поставлена в очередь. Ссылка появится в истории после обработки.`;
+    await loadDownloads();
+  } catch (err) {
+    result.textContent = "Ошибка: " + err.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 document.getElementById("downloadsRefresh").addEventListener("click", () => {
   void loadDownloads().catch((err) => console.warn("[downloads]", err));

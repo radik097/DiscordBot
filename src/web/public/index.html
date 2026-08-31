@@ -324,11 +324,18 @@
     </header>
     <div class="panel-body">
       <div id="downloadSettings" class="download-settings"></div>
+      <form id="downloadForm" class="download-form">
+        <label class="download-url">Ссылка на публичное видео<input id="downloadUrl" type="url" required maxlength="2048" placeholder="https://youtube.com/watch?v=…" autocomplete="off"></label>
+        <label>Формат<select id="downloadFormat"><option value="video">Видео со звуком</option><option value="audio">Только аудио</option></select></label>
+        <label>Качество<select id="downloadQuality"><option value="480">480p</option><option value="720" selected>720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p</option><option value="max">Максимальное</option></select></label>
+        <button id="downloadSubmit" type="submit" class="primary">⬇️ Скачать</button>
+      </form>
+      <div id="downloadResult" class="hint">Поддерживаются публичные ссылки Cobalt. DRM, приватные страницы и paywall не обходятся.</div>
       <div class="actions"><button id="downloadsRefresh">Обновить</button></div>
       <h3>Очередь</h3>
       <div id="downloadQueue" class="hint">Очередь пуста.</div>
       <h3>История</h3>
-      <div class="table-scroll"><table class="datatable"><thead><tr><th>Дата</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Размер</th></tr></thead><tbody id="downloadHistory"></tbody></table></div>
+      <div class="table-scroll"><table class="datatable"><thead><tr><th>Дата</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Размер</th><th>Файл</th></tr></thead><tbody id="downloadHistory"></tbody></table></div>
     </div>
   </article>
 

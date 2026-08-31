@@ -23,9 +23,25 @@ describe("CobaltClient", () => {
         return Response.json({ status: "tunnel", url: "http://cobalt:9000/tunnel/abc", filename: "clip.mp4" });
       },
     });
-    expect(await client.resolve("https://youtube.com/watch?v=abc")).toEqual({ status: "tunnel", url: "http://cobalt:9000/tunnel/abc", filename: "clip.mp4" });
+    expect(await client.resolve("https://youtube.com/watch?v=abc", {
+      videoQuality: "1080",
+      youtubeVideoCodec: "h264",
+      youtubeVideoContainer: "mp4",
+    })).toEqual({ status: "tunnel", url: "http://cobalt:9000/tunnel/abc", filename: "clip.mp4" });
     expect(request.options.headers.authorization).toBe("Api-Key test-key");
-    expect(JSON.parse(request.options.body)).toMatchObject({ alwaysProxy: true, downloadMode: "auto" });
+    expect(JSON.parse(request.options.body)).toMatchObject({
+      alwaysProxy: true,
+      downloadMode: "auto",
+      videoQuality: "1080",
+      youtubeVideoCodec: "h264",
+      youtubeVideoContainer: "mp4",
+    });
+  });
+
+  test("rejects unsupported video options before contacting Cobalt", async () => {
+    const client = new CobaltClient({ fetchImpl: () => { throw new Error("must not fetch"); } });
+    await expect(client.resolve("https://youtube.com/watch?v=abc", { videoQuality: "ultra" }))
+      .rejects.toThrow("качество видео");
   });
 
   test("requests audio mode and prefers picker background audio", async () => {

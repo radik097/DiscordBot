@@ -82,6 +82,57 @@ describe("web email access integration", () => {
     downloadService.cleanupExpired(link.expiresAt + 1);
   });
 
+  test("queues an authenticated website video without holding the web request open", async () => {
+    let submitted;
+    const downloads = {
+      status: () => ({ settings: {}, queue: [], history: [], available: [] }),
+      startPublic: (request) => {
+        submitted = request;
+        return { id: "queued-video" };
+      },
+      takePublicFile: () => null,
+    };
+    const isolatedAccess = new AccessControl({ dbPath: ":memory:", publicBaseUrl: "https://discord.example.com", ownerEmail: OWNER });
+    const isolatedClient = {
+      isReady: () => true,
+      user: { tag: "TestBot#0001" },
+      guilds: { cache: new Collection() },
+    };
+    const isolated = startWebServer(isolatedClient, 0, {
+      accessControl: isolatedAccess,
+      identitySecret: SECRET,
+      downloads,
+    });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    try {
+      const owner = await fetch(`${isolatedBase}/`, { redirect: "manual" });
+      const cookie = cookieFrom(owner);
+      const csrf = (await (await fetch(`${isolatedBase}/api/csrf`, { headers: { cookie } })).json()).token;
+      const response = await fetch(`${isolatedBase}/api/downloads`, {
+        method: "POST",
+        headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" },
+        body: JSON.stringify({
+          guildId: "guild",
+          url: "https://youtube.com/watch?v=abc",
+          format: "video",
+          quality: "1080",
+        }),
+      });
+      expect(response.status).toBe(202);
+      expect(await response.json()).toMatchObject({ id: "queued-video", status: "queued" });
+      expect(submitted).toMatchObject({
+        guildId: "guild",
+        sourceUrl: "https://youtube.com/watch?v=abc",
+        format: "video",
+        quality: "1080",
+      });
+    } finally {
+      await isolated.stopRemoteAccess();
+      isolated.stopPanel();
+      isolated.stop(true);
+    }
+  });
+
   test("streams the current cached track through the authenticated monitor endpoint", async () => {
     const guildId = `monitor-${crypto.randomUUID()}`;
     const filePath = join(AUDIO_CACHE_DIR, `${guildId}.wav`);

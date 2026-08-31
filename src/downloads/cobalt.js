@@ -66,8 +66,22 @@ export class CobaltClient {
     this.fetch = fetchImpl;
   }
 
-  async resolve(sourceUrl, { signal, downloadMode = "auto", audioFormat, localProcessing = "disabled" } = {}) {
+  async resolve(sourceUrl, {
+    signal,
+    downloadMode = "auto",
+    audioFormat,
+    videoQuality,
+    youtubeVideoCodec,
+    youtubeVideoContainer,
+    localProcessing = "disabled",
+  } = {}) {
     const source = validatePublicMediaUrl(sourceUrl);
+    if (!["auto", "audio", "mute"].includes(downloadMode)) throw new CobaltError("Некорректный режим загрузки.");
+    if (videoQuality && !["144", "240", "360", "480", "720", "1080", "1440", "2160", "4320", "max"].includes(String(videoQuality))) {
+      throw new CobaltError("Некорректное качество видео.");
+    }
+    if (youtubeVideoCodec && !["h264", "av1", "vp9"].includes(youtubeVideoCodec)) throw new CobaltError("Некорректный видеокодек.");
+    if (youtubeVideoContainer && !["auto", "mp4", "webm", "mkv"].includes(youtubeVideoContainer)) throw new CobaltError("Некорректный контейнер видео.");
     const headers = { accept: "application/json", "content-type": "application/json" };
     if (this.apiKey) headers.authorization = `Api-Key ${this.apiKey}`;
     const response = await this.fetch(this.apiUrl, {
@@ -77,6 +91,9 @@ export class CobaltClient {
         url: source.toString(),
         downloadMode,
         ...(audioFormat ? { audioFormat } : {}),
+        ...(videoQuality ? { videoQuality: String(videoQuality) } : {}),
+        ...(youtubeVideoCodec ? { youtubeVideoCodec } : {}),
+        ...(youtubeVideoContainer ? { youtubeVideoContainer } : {}),
         filenameStyle: "basic",
         alwaysProxy: true,
         localProcessing,
