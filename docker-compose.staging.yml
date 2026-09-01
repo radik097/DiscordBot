@@ -1,0 +1,37 @@
+services:
+  discord-auth-staging:
+    image: discord-bot:access-staging
+    container_name: discord-bot-access-staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["bun", "run", "src/staging.js"]
+    restart: unless-stopped
+    environment:
+      WEB_PORT: 8788
+      DEPLOYMENT_MODE: local
+      REMOTE_ACCESS_PROVIDER: disabled
+      ACCESS_STAGING_MODE: "true"
+      ACCESS_DB_PATH: /app/staging-data/access.sqlite
+      ACCESS_PUBLIC_BASE_URL: ${ACCESS_PUBLIC_BASE_URL:-https://staging.example.com}
+      ACCESS_OWNER_EMAIL: ${ACCESS_OWNER_EMAIL:-owner@example.com}
+      ACCESS_OWNER_PRIORITY_MS: ${ACCESS_OWNER_PRIORITY_MS:-300000}
+      PROJECT_IDENTITY_SECRET: ${PROJECT_IDENTITY_SECRET:?PROJECT_IDENTITY_SECRET is required for staging}
+    volumes:
+      - ./config:/app/config:ro
+      - ./staging-data:/app/staging-data
+    ports:
+      - "127.0.0.1:8788:8788"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8788/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"

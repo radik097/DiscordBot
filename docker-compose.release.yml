@@ -1,0 +1,19 @@
+services:
+  discord-bot:
+    image: discord-bot:1.16.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ACCESS_PUBLIC_BASE_URL: ${ACCESS_PUBLIC_BASE_URL:?ACCESS_PUBLIC_BASE_URL is required}
+      ACCESS_OWNER_EMAIL: ${ACCESS_OWNER_EMAIL:?ACCESS_OWNER_EMAIL is required}
+      ACCESS_OWNER_PRIORITY_MS: ${ACCESS_OWNER_PRIORITY_MS:-300000}
+      PROJECT_IDENTITY_SECRET: ${PROJECT_IDENTITY_SECRET:?PROJECT_IDENTITY_SECRET is required}
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./logs:/app/logs
+  transcription-worker:
+    volumes:
+      - ./data:/data
+      - whisper-models:/models

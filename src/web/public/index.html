@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>discord-bot — панель управления</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <h1>🤖 Панель управления</h1>
+  <div class="statusbar">
+    <span id="botTag">—</span>
+    <span id="uptime"></span>
+    <span id="accessIdentity" class="access-identity">Проверка доступа…</span>
+    <select id="guildSelect"></select>
+    <button id="accessAdminBtn" class="phone-connect" hidden>🔐 Доступ</button>
+    <button id="accessLogoutBtn" title="Завершить текущую веб-сессию">Выйти</button>
+    <button id="phoneConnectBtn" class="phone-connect">📱 Подключить телефон</button>
+    <button id="panelResizeModeBtn" type="button" aria-pressed="false" title="Включить режим изменения размеров блоков">↘ Размеры</button>
+    <div class="panel-menu">
+      <button id="panelMenuBtn" title="Показать скрытые панели">☰ Панели</button>
+      <div id="panelMenuList" class="panel-menu-list"></div>
+    </div>
+  </div>
+</header>
+
+<main id="board">
+
+  <article class="panel" data-panel="dashboard" data-icon="🖥️" data-title="Дашборд">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🖥️</span>
+      <span class="panel-title">Дашборд</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div id="guildInfo" class="card"></div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="config" data-icon="⚙️" data-title="Конфиг">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">⚙️</span>
+      <span class="panel-title">Конфиг</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <p class="hint">Редактируй прямо тут. «Проверить» — офлайн-валидация имён ролей/прав/каналов. «Сохранить» — пишет файл на диск бота. «Build»/«Wipe» — применяют конфиг к выбранному серверу в Discord.</p>
+      <textarea id="configEditor" spellcheck="false"></textarea>
+      <div id="configErrors" class="errors"></div>
+      <div class="actions">
+        <button id="btnValidate">Проверить</button>
+        <button id="btnSave">Сохранить</button>
+        <button id="btnBuild" class="primary">Build на выбранном сервере</button>
+        <label><input type="checkbox" id="wipeConfirm" /> подтверждаю удаление всего</label>
+        <button id="btnWipe" class="danger">Wipe на выбранном сервере</button>
+      </div>
+      <pre id="configLog" class="log"></pre>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="music" data-icon="🎵" data-title="Музыка">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🎵</span>
+      <span class="panel-title">Музыка</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="actions">
+        <select id="musicChannel"></select>
+        <input id="musicQuery" placeholder="Трек, YouTube, Spotify или ссылка сервиса Cobalt" style="flex:1; min-width:240px;" />
+        <button id="musicPlay" class="primary">▶️ Включить</button>
+      </div>
+      <div id="musicError" class="errors"></div>
+      <div id="nowPlaying" class="card music-now">
+        <div id="nowPlayingTitle">Сейчас ничего не играет.</div>
+        <div id="musicProgressArea" class="music-progress-area" hidden>
+          <div class="music-time-row">
+            <span id="musicElapsed">0:00</span>
+            <span id="musicRemaining">−0:00</span>
+          </div>
+          <div class="music-progress-track" role="progressbar" aria-label="Прогресс трека">
+            <div id="musicProgressBar" class="music-progress-bar"></div>
+          </div>
+          <div class="music-telemetry-grid">
+            <div><span class="metric-label">Стабильность</span><strong id="musicStability">—</strong></div>
+            <div><span class="metric-label">Буфер</span><strong id="musicBuffer">—</strong></div>
+            <div><span class="metric-label">Плеер</span><strong id="musicPlayerState">—</strong></div>
+            <div><span class="metric-label">Голос</span><strong id="musicVoiceState">—</strong></div>
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="musicPause">⏸️ Пауза</button>
+        <button id="musicResume">▶️ Продолжить</button>
+        <button id="musicSkip">⏭️ Скип</button>
+        <button id="musicStop" class="danger">⏹️ Стоп</button>
+        <label>Громкость <input type="range" id="musicVolume" min="0" max="200" value="100" /> <span id="musicVolumeLabel">100%</span></label>
+        <button id="musicMonitorToggle" type="button">🎧 Включить мониторинг</button>
+      </div>
+      <div id="musicMonitor" class="card music-monitor" hidden>
+        <div>
+          <strong>Прямой монитор</strong>
+          <span id="musicMonitorStatus" class="hint">Ожидание активного трека.</span>
+        </div>
+        <audio id="musicMonitorAudio" controls preload="none"></audio>
+        <small class="hint">Укажите трек в поле выше и нажмите «Слушать», либо включите монитор для текущего трека. Поток идёт из локального кэша напрямую в браузер — без Discord Voice.</small>
+      </div>
+      <div class="music-queue-header">
+        <h3>Очередь <span id="musicQueueCount" class="queue-count">0</span></h3>
+        <button id="musicSavePlaylist" title="Скачать текущий трек и всю очередь в локальный кэш" disabled>💾 Сохранить плейлист</button>
+      </div>
+      <div id="musicSaveStatus" class="card music-save-status" hidden>
+        <div class="music-save-row">
+          <strong id="musicSaveTitle">Сохранение плейлиста</strong>
+          <span id="musicSaveNumbers">0 / 0</span>
+        </div>
+        <div class="music-progress-track" role="progressbar" aria-label="Сохранение плейлиста" aria-valuemin="0" aria-valuemax="100">
+          <div id="musicSaveProgress" class="music-progress-bar music-save-progress"></div>
+        </div>
+        <div id="musicSaveDetails" class="hint"></div>
+      </div>
+      <ol id="musicQueue"></ol>
+      <button id="musicQueueMore" class="queue-more" type="button" hidden>Показать ещё</button>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="cache-history" data-icon="🕘" data-title="История песен">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🕘</span>
+      <span class="panel-title">История песен</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="cached-history-header">
+        <div>
+          <h3>Закэшированные песни <span id="cachedHistoryCount" class="queue-count">0</span></h3>
+          <div class="hint">Только реально запущенные песни, чей аудиофайл ещё хранится в кэше. Повторный запуск не требует новой загрузки.</div>
+        </div>
+        <button id="refreshCachedHistory" title="Обновить историю">↻</button>
+      </div>
+      <div id="cachedHistoryError" class="errors"></div>
+      <div id="cachedMusicHistory" class="cached-music-history"></div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="playlists" data-icon="💿" data-title="Плейлисты">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">💿</span>
+      <span class="panel-title">Плейлисты</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="saved-playlists-header">
+        <div>
+          <h3>Локальная библиотека <span id="savedPlaylistCount" class="queue-count">0</span></h3>
+          <div class="hint">Каждое сохранение имеет собственные ID и имя. Откройте плейлист и нажмите «Переключиться» — позиция предыдущего плейлиста сохранится.</div>
+        </div>
+        <button id="refreshPlaylists" title="Обновить список">↻</button>
+      </div>
+      <div id="savedPlaylistsError" class="errors"></div>
+      <div id="savedPlaylists" class="saved-playlists"></div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="voice" data-icon="🔊" data-title="Войс">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🔊</span>
+      <span class="panel-title">Войс</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="actions">
+        <select id="voiceChannelSelect"></select>
+      </div>
+      <div id="voiceStatus" class="errors"></div>
+      <table id="voiceMembersTable" class="datatable">
+        <thead><tr><th>Участник</th><th>Статус</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="moderation" data-icon="🛡️" data-title="Модерация">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🛡️</span>
+      <span class="panel-title">Модерация</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="modform">
+        <input id="modUserId" placeholder="ID пользователя Discord" />
+        <input id="modReason" placeholder="Причина (необязательно)" />
+        <button data-action="mute">Замьютить</button>
+        <button data-action="jail">В тюрьму</button>
+      </div>
+      <div id="modStatus" class="errors"></div>
+      <div class="modlists">
+        <div>
+          <h3>Muted</h3>
+          <ul id="mutedList"></ul>
+        </div>
+        <div>
+          <h3>Заключеный</h3>
+          <ul id="jailedList"></ul>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="members" data-icon="👥" data-title="Участники">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">👥</span>
+      <span class="panel-title">Участники</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <input id="memberSearch" placeholder="Поиск по нику..." style="margin-bottom:12px; width:100%;" />
+      <table id="membersTable" class="datatable">
+        <thead><tr><th></th><th>Участник</th><th>Роли</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="stats" data-icon="📊" data-title="Статистика">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">📊</span>
+      <span class="panel-title">Статистика</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div id="statsTotal" class="card"></div>
+      <div class="statscols">
+        <div>
+          <h3>Топ участников</h3>
+          <table class="datatable"><thead><tr><th>Участник</th><th>Сообщений</th></tr></thead><tbody id="statsUsers"></tbody></table>
+        </div>
+        <div>
+          <h3>Топ каналов</h3>
+          <table class="datatable"><thead><tr><th>Канал</th><th>Сообщений</th></tr></thead><tbody id="statsChannels"></tbody></table>
+        </div>
+      </div>
+      <h3>Сообщений за 7 дней</h3>
+      <table class="datatable"><thead><tr><th>День</th><th>Сообщений</th></tr></thead><tbody id="statsDays"></tbody></table>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="history" data-icon="🗒️" data-title="История">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🗒️</span>
+      <span class="panel-title">История</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div class="actions">
+        <select id="historyChannel"></select>
+        <input id="historyLimit" type="number" value="50" min="1" max="500" />
+        <button id="historyLoad">Загрузить</button>
+      </div>
+      <div id="historyList"></div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="transcription" data-icon="📝" data-title="Транскрипция">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">📝</span>
+      <span class="panel-title">Транскрипция</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <form id="transcriptionForm" class="transcription-form">
+        <label>Голосовой канал<select id="transcriptionVoice" required></select></label>
+        <label>Канал уведомлений<select id="transcriptionText" required></select></label>
+        <label>Язык<select id="transcriptionLanguage"><option value="auto">Авто RU/EN</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+        <button id="transcriptionStart" type="submit" class="primary">🔴 Начать</button>
+      </form>
+      <div class="actions">
+        <button id="transcriptionStop" type="button" class="danger" disabled>⏹️ Остановить</button>
+        <button id="transcriptionRefresh" type="button">Обновить</button>
+        <span id="transcriptionStatus" class="hint">Запись не активна.</span>
+      </div>
+      <div id="transcriptionLive" class="transcription-live"><span class="hint">Распознанный текст появится после первого минутного чанка.</span></div>
+      <h3>Сессии</h3>
+      <div class="table-scroll"><table class="datatable"><thead><tr><th>Начало</th><th>Статус</th><th>Язык</th><th>Экспорт</th><th></th></tr></thead><tbody id="transcriptionSessions"></tbody></table></div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="downloads" data-icon="⬇️" data-title="Загрузки">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">⬇️</span>
+      <span class="panel-title">Загрузки</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <div id="downloadSettings" class="download-settings"></div>
+      <form id="downloadForm" class="download-form">
+        <label class="download-url">Ссылка на публичное видео<input id="downloadUrl" type="url" required maxlength="2048" placeholder="https://youtube.com/watch?v=…" autocomplete="off"></label>
+        <label>Формат<select id="downloadFormat"><option value="video">Видео со звуком</option><option value="audio">Только аудио</option></select></label>
+        <label>Качество<select id="downloadQuality"><option value="480">480p</option><option value="720" selected>720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p</option><option value="max">Максимальное</option></select></label>
+        <button id="downloadSubmit" type="submit" class="primary">⬇️ Скачать</button>
+      </form>
+      <div id="downloadResult" class="hint">Поддерживаются публичные ссылки Cobalt. DRM, приватные страницы и paywall не обходятся.</div>
+      <div class="actions"><button id="downloadsRefresh">Обновить</button></div>
+      <h3>Очередь</h3>
+      <div id="downloadQueue" class="hint">Очередь пуста.</div>
+      <h3>История</h3>
+      <div class="table-scroll"><table class="datatable"><thead><tr><th>Дата</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Размер</th><th>Файл</th></tr></thead><tbody id="downloadHistory"></tbody></table></div>
+    </div>
+  </article>
+
+</main>
+
+<dialog id="playlistNameDialog" class="playlist-dialog">
+  <form id="playlistNameForm">
+    <h2>Сохранить плейлист</h2>
+    <p class="hint">Выбери существующее имя, чтобы создать новую версию без удаления старой, или введи своё.</p>
+    <label>
+      Существующие плейлисты
+      <select id="playlistExistingName">
+        <option value="">Новый плейлист</option>
+      </select>
+    </label>
+    <label>
+      Имя плейлиста
+      <input id="playlistCustomName" maxlength="100" required placeholder="Например: Музыка для работы" />
+    </label>
+    <div id="playlistNameError" class="errors"></div>
+    <div class="dialog-actions">
+      <button id="playlistNameCancel" type="button">Отмена</button>
+      <button id="playlistNameConfirm" type="submit" class="primary">💾 Начать сохранение</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="phoneDialog" class="playlist-dialog phone-dialog">
+  <form method="dialog">
+    <div><h2>📱 Подключение телефона</h2><p id="phoneHint" class="hint">Запустите защищённый туннель и отсканируйте QR-код телефоном.</p></div>
+    <div id="phoneQr" class="phone-qr" hidden></div>
+    <a id="phoneUrl" class="phone-url" target="_blank" rel="noreferrer" hidden></a>
+    <section class="phone-devices" aria-labelledby="phoneDevicesTitle">
+      <div class="phone-devices-header">
+        <strong id="phoneDevicesTitle">Подключённые устройства</strong>
+        <button id="phoneResetSessions" type="button" class="danger" hidden>Сбросить все</button>
+      </div>
+      <div id="phoneDevicesList" class="phone-devices-list"><span class="hint">Нет активных сессий.</span></div>
+    </section>
+    <div id="phoneError" class="errors"></div>
+    <div class="dialog-actions phone-actions">
+      <button id="phoneDisable" type="button" class="danger" hidden>Отключить доступ</button>
+      <button id="phoneStart" type="button" class="primary">Создать QR-код</button>
+      <button value="cancel">Закрыть</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="accessAdminDialog" class="playlist-dialog access-dialog">
+  <form method="dialog">
+    <div>
+      <h2>🔐 Управление веб-доступом</h2>
+      <p class="hint">Суточные ссылки выдаёт команда <code>/get-url email</code>. Здесь владелец создаёт постоянные аккаунты и отзывает доступ.</p>
+    </div>
+    <section class="access-create">
+      <label>Электронная почта<input id="accessInviteEmail" type="email" maxlength="254" placeholder="person@example.com"></label>
+      <button id="accessInvitePermanent" type="button" class="primary">Выдать постоянный доступ</button>
+    </section>
+    <div id="accessInviteResult" class="card" hidden></div>
+    <div id="accessAdminError" class="errors"></div>
+    <section>
+      <h3>Постоянные аккаунты</h3>
+      <div id="accessAccounts" class="phone-devices-list"><span class="hint">Нет аккаунтов.</span></div>
+    </section>
+    <section>
+      <h3>Активные сессии</h3>
+      <div id="accessSessions" class="phone-devices-list"><span class="hint">Нет активных сессий.</span></div>
+    </section>
+    <div class="dialog-actions"><button value="cancel">Закрыть</button></div>
+  </form>
+</dialog>
+
+<nav id="mobileNav" class="mobile-nav" aria-label="Разделы панели">
+  <button type="button" data-mobile-panel="music"><span>🎵</span>Музыка</button>
+  <button type="button" data-mobile-panel="playlists"><span>💿</span>Плейлисты</button>
+  <button type="button" data-mobile-panel="voice"><span>🔊</span>Войс</button>
+  <button type="button" data-mobile-panel="dashboard"><span>🖥️</span>Сервер</button>
+  <button type="button" id="mobileMoreBtn"><span>•••</span>Ещё</button>
+</nav>
+<div id="mobileMoreMenu" class="mobile-more-menu" hidden>
+  <div class="mobile-more-sheet">
+    <div class="mobile-more-title"><strong>Другие разделы</strong><button type="button" id="mobileMoreClose" aria-label="Закрыть">✕</button></div>
+    <button type="button" data-mobile-panel="config">⚙️ Конфиг</button>
+    <button type="button" data-mobile-panel="moderation">🛡️ Модерация</button>
+    <button type="button" data-mobile-panel="members">👥 Участники</button>
+    <button type="button" data-mobile-panel="stats">📊 Статистика</button>
+    <button type="button" data-mobile-panel="history">🗒️ История</button>
+    <button type="button" data-mobile-panel="cache-history">🕘 История песен</button>
+    <button type="button" data-mobile-panel="transcription">📝 Транскрипция</button>
+    <button type="button" data-mobile-panel="downloads">⬇️ Загрузки</button>
+  </div>
+</div>
+
+<script src="demo-api.js"></script>
+<script src="panels.js"></script>
+<script src="mobile.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

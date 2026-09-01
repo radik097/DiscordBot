@@ -1,0 +1,143 @@
+{
+  "roles": [
+    {
+      "name": "Новичок",
+      "color": "#e74c3c",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [
+        "ViewChannel",
+        "SendMessages",
+        "ReadMessageHistory",
+        "Connect",
+        "Speak",
+        "UseVAD",
+        "ChangeNickname"
+      ]
+    },
+    {
+      "name": "Участник",
+      "color": "#57f287",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [
+        "ViewChannel",
+        "SendMessages",
+        "EmbedLinks",
+        "AttachFiles",
+        "ReadMessageHistory",
+        "Connect",
+        "Speak",
+        "UseVAD",
+        "ChangeNickname"
+      ]
+    },
+    {
+      "name": "Модератор",
+      "color": "#3498db",
+      "hoist": true,
+      "mentionable": true,
+      "permissions": [
+        "ViewChannel",
+        "SendMessages",
+        "ManageMessages",
+        "KickMembers",
+        "ModerateMembers",
+        "ReadMessageHistory",
+        "Connect",
+        "Speak",
+        "UseVAD"
+      ]
+    },
+    {
+      "name": "Ботоводство",
+      "color": "#5865f2",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": []
+    },
+    {
+      "name": "Muted",
+      "color": "#5c5e66",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": []
+    },
+    {
+      "name": "Заключённый",
+      "color": "#5c5e66",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": []
+    }
+  ],
+
+  "categories": [
+    { "name": "ОСНОВНОЕ" },
+    { "name": "ГОЛОСОВЫЕ" },
+    { "name": "ИЗОЛЯЦИЯ" }
+  ],
+
+  "channels": [
+    {
+      "name": "объявления",
+      "type": "text",
+      "category": "ОСНОВНОЕ",
+      "topic": "Информация о сервере и обновлениях",
+      "roles": {
+        "@everyone": { "allow": ["ViewChannel"], "deny": ["SendMessages"] }
+      }
+    },
+    {
+      "name": "правила",
+      "type": "text",
+      "category": "ОСНОВНОЕ",
+      "topic": "Правила сервера",
+      "roles": {
+        "@everyone": { "allow": ["ViewChannel"], "deny": ["SendMessages"] }
+      }
+    },
+    {
+      "name": "болтовня",
+      "type": "text",
+      "category": "ОСНОВНОЕ"
+    },
+    {
+      "name": "музыка",
+      "type": "text",
+      "category": "ОСНОВНОЕ",
+      "botOnly": true
+    },
+    {
+      "name": "Общий зал",
+      "type": "voice",
+      "category": "ГОЛОСОВЫЕ"
+    },
+    {
+      "name": "Тюрьма",
+      "type": "voice",
+      "category": "ИЗОЛЯЦИЯ"
+    }
+  ],
+
+  "musicAllowedRoles": ["Участник", "Модератор"],
+  "downloadAllowedRoles": ["Ботоводство"],
+
+  "globalDenyRoles": {
+    "Muted": ["SendMessages"]
+  },
+
+  "alwaysAllRoles": {
+    "Модератор": ["ViewChannel", "SendMessages", "Connect", "Speak"]
+  },
+
+  "isolationRoles": [
+    {
+      "role": "Заключённый",
+      "onlyChannels": ["Тюрьма"],
+      "permissions": ["ViewChannel", "Connect", "SendMessages"]
+    }
+  ],
+
+  "protectedChannels": ["объявления", "правила"]
+}
