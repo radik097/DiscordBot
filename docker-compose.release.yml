@@ -2,18 +2,18 @@ services:
   discord-bot:
     image: discord-bot:1.16.0
     build:
-      context: D:/DiscordBot-access-staging
+      context: .
       dockerfile: Dockerfile
     environment:
-      ACCESS_PUBLIC_BASE_URL: https://discord.llmtechspec.xyz
-      ACCESS_OWNER_EMAIL: rodionaustralia@gmail.com
-      ACCESS_OWNER_PRIORITY_MS: 300000
+      ACCESS_PUBLIC_BASE_URL: ${ACCESS_PUBLIC_BASE_URL:?ACCESS_PUBLIC_BASE_URL is required}
+      ACCESS_OWNER_EMAIL: ${ACCESS_OWNER_EMAIL:?ACCESS_OWNER_EMAIL is required}
+      ACCESS_OWNER_PRIORITY_MS: ${ACCESS_OWNER_PRIORITY_MS:-300000}
       PROJECT_IDENTITY_SECRET: ${PROJECT_IDENTITY_SECRET:?PROJECT_IDENTITY_SECRET is required}
     volumes:
-      - C:/Users/descr/Documents/ChatGPT/Windows/DiscordBot/config:/app/config
-      - C:/Users/descr/Documents/ChatGPT/Windows/DiscordBot/data:/app/data
-      - C:/Users/descr/Documents/ChatGPT/Windows/DiscordBot/logs:/app/logs
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./logs:/app/logs
   transcription-worker:
     volumes:
-      - C:/Users/descr/Documents/ChatGPT/Windows/DiscordBot/data:/data
+      - ./data:/data
       - whisper-models:/models

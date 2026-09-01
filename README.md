@@ -33,7 +33,8 @@ Discord-бот на discord.js/Bun: управление структурой с
 На скриншотах используются только демонстрационные данные. Реальные серверы,
 пользователи, каналы, треки, идентификаторы, токены и адреса не публикуются.
 
-**[Открыть интерактивную демонстрацию реального UI](https://radik097.github.io/DiscordBot/)**
+Интерактивную демонстрацию можно опубликовать через GitHub Pages по адресу
+`https://<github-user>.github.io/<repository>/`.
 
 GitHub Pages публикует те же HTML/CSS/JS-файлы, что использует Docker-панель.
 На публичном домене запросы к Discord API заменяются локальным демо-слоем:
@@ -75,10 +76,48 @@ docker compose exec discord-bot bun run src/deploy-commands.js
 
 ## ⚙️ Требования
 
-- Docker (Docker Desktop на Windows/macOS, Docker Engine на Linux)
+- Docker (Docker Desktop на Windows/macOS, Docker Engine на Linux) для полного
+  запуска всех сервисов; либо Bun и `yt-dlp` для запуска только процесса бота
 - NVIDIA GPU и рабочий NVIDIA Container Toolkit для стандартного профиля
   локальной транскрипции Whisper
 - Токен бота и Application ID из [Discord Developer Portal](https://discord.com/developers/applications)
+
+---
+
+## ▶️ Быстрый запуск на Windows
+
+Сначала скопируйте `.env.example` в `.env` и заполните как минимум
+`DISCORD_TOKEN` и `CLIENT_ID`. Скрипты сами создают локальные каталоги и
+`config/structure.json` из публичного шаблона.
+
+### Через Docker Compose
+
+```powershell
+.\scripts\start-docker.ps1
+```
+
+Дополнительные параметры:
+
+```powershell
+.\scripts\start-docker.ps1 -DeployCommands # зарегистрировать slash-команды
+.\scripts\start-docker.ps1 -FollowLogs     # оставить логи бота в foreground
+.\scripts\start-docker.ps1 -NoBuild        # использовать уже собранный образ
+```
+
+Профили `pot` и `server` берутся из `COMPOSE_PROFILES` в `.env`. Docker-вариант
+поднимает основной бот, Cobalt и локальный Whisper worker одной командой.
+
+### Без Docker
+
+```powershell
+.\scripts\start-local.ps1
+```
+
+Скрипт проверяет Bun, устанавливает зависимости по lock-файлу и запускает бота
+в foreground. Параметр `-DeployCommands` сначала регистрирует slash-команды, а
+`-SkipInstall` пропускает `bun install`. Cobalt и Whisper worker без Compose
+нужно запускать отдельно и указывать в `.env` через `COBALT_API_URL` и
+`TRANSCRIPTION_WORKER_URL`.
 
 ---
 

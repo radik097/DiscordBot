@@ -67,8 +67,7 @@ Terraform.
 | Service type | `HTTP` |
 | URL | `gateway:4180` |
 
-Итоговый адрес будет выглядеть как `https://discord.example.com`. Для текущей
-установки используется `https://discord.llmtechspec.xyz`.
+Итоговый адрес будет выглядеть как `https://discord.example.com`.
 
 Важно:
 
@@ -124,7 +123,7 @@ discord.example.com/access/invite*
 
 ## 5. Настроить DockerHub gateway
 
-В локальном `D:\DockerHub\.env` задайте:
+В локальном `.env` gateway-проекта задайте:
 
 ```env
 PUBLIC_BASE_DOMAIN=example.com
@@ -150,7 +149,7 @@ CLOUDFLARE_PROJECT_ACCESS_AUD=<AUD DiscordBot email-invite application>
 Запуск:
 
 ```powershell
-Set-Location D:\DockerHub
+Set-Location C:\path\to\gateway
 docker compose --profile tunnel up -d --build --wait
 docker compose --profile tunnel ps
 docker logs --tail 100 private-docker-hub-cloudflared

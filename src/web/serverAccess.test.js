@@ -12,7 +12,7 @@ import { getQueue } from "../music/queue.js";
 import { AUDIO_CACHE_DIR } from "../music/source.js";
 
 const SECRET = "integration-project-identity-secret-long-enough";
-const OWNER = "rodionaustralia@gmail.com";
+const OWNER = "owner@example.com";
 
 function cookieFrom(response) {
   return String(response.headers.get("set-cookie") || "").split(";", 1)[0];

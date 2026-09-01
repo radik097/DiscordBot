@@ -137,7 +137,7 @@ export class AccessControl {
   constructor({
     dbPath = process.env.ACCESS_DB_PATH || new URL("../../data/access.sqlite", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
     publicBaseUrl = process.env.ACCESS_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || "http://127.0.0.1:8787",
-    ownerEmail = process.env.ACCESS_OWNER_EMAIL || "rodionaustralia@gmail.com",
+    ownerEmail = process.env.ACCESS_OWNER_EMAIL || "owner@example.com",
     ownerPriorityMs = Number(process.env.ACCESS_OWNER_PRIORITY_MS) || DEFAULT_OWNER_PRIORITY_MS,
     now = () => Date.now(),
   } = {}) {

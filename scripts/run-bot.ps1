@@ -1,4 +1,4 @@
-# Launcher used by the "DiscordBotArchivarus" scheduled task (auto-start on logon).
+# Launcher suitable for a scheduled task (auto-start on logon).
 # Keeps the bot running: restarts it automatically if it crashes/exits, logs to data\bot.log.
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot

@@ -13,10 +13,10 @@ services:
       REMOTE_ACCESS_PROVIDER: disabled
       ACCESS_STAGING_MODE: "true"
       ACCESS_DB_PATH: /app/staging-data/access.sqlite
-      ACCESS_PUBLIC_BASE_URL: ${ACCESS_PUBLIC_BASE_URL:-https://discord.llmtechspec.xyz}
-      ACCESS_OWNER_EMAIL: ${ACCESS_OWNER_EMAIL:-rodionaustralia@gmail.com}
+      ACCESS_PUBLIC_BASE_URL: ${ACCESS_PUBLIC_BASE_URL:-https://staging.example.com}
+      ACCESS_OWNER_EMAIL: ${ACCESS_OWNER_EMAIL:-owner@example.com}
       ACCESS_OWNER_PRIORITY_MS: ${ACCESS_OWNER_PRIORITY_MS:-300000}
-      PROJECT_IDENTITY_SECRET: ${PROJECT_IDENTITY_SECRET:-staging-only-identity-secret-change-before-public-use}
+      PROJECT_IDENTITY_SECRET: ${PROJECT_IDENTITY_SECRET:?PROJECT_IDENTITY_SECRET is required for staging}
     volumes:
       - ./config:/app/config:ro
       - ./staging-data:/app/staging-data

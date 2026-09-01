@@ -10,7 +10,7 @@ import {
   verifyTrustedIdentity,
 } from "./accessControl.js";
 
-const OWNER = "rodionaustralia@gmail.com";
+const OWNER = "owner@example.com";
 const SECRET = "test-project-identity-secret-that-is-long-enough";
 
 function request(path = "/", { cookie = "", email, now = Date.now(), method = "GET", userAgent = "Chrome Windows" } = {}) {
