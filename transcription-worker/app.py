@@ -211,6 +211,14 @@ def health():
 def transcribe_chunk(job: ChunkJob):
     if model is None:
         raise HTTPException(503, model_error or "model is not ready")
+    speaker_paths = [
+        (speaker, existing_audio_path(safe_path(speaker.file)))
+        for speaker in job.speakers
+    ]
+    missing_speakers = [speaker.file for speaker, path in speaker_paths if not path.exists()]
+    if missing_speakers:
+        missing = ", ".join(missing_speakers)
+        raise HTTPException(422, f"speaker audio files are unavailable: {missing}")
     reference = None
     reference_path = existing_audio_path(safe_path(job.referenceFile)) if job.referenceFile else None
     if reference_path and reference_path.exists():
@@ -219,10 +227,7 @@ def transcribe_chunk(job: ChunkJob):
     aec_scores = []
     archived_speakers = []
     with model_lock:
-        for speaker in job.speakers:
-            path = existing_audio_path(safe_path(speaker.file))
-            if not path.exists():
-                continue
+        for speaker, path in speaker_paths:
             microphone = decode_audio_file(path)
             cleaned = microphone
             aec_applied = False
