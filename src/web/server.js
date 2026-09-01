@@ -27,6 +27,7 @@ import { AccessControl, verifyTrustedIdentity } from "./accessControl.js";
 import { registerAccessControl, unregisterAccessControl } from "./accessControlRegistry.js";
 import { downloadService } from "../downloads/service.js";
 import { getPreparedMusicMonitor, prepareMusicMonitorTrack, startMusicMonitor } from "../music/monitor.js";
+import { transcriptionService } from "../transcription/service.js";
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const PUBLIC_ROOT = resolvePath(PUBLIC_DIR.pathname.replace(/^\/([A-Za-z]:)/, "$1"));
@@ -55,6 +56,8 @@ const roleByRoute = [
   { path: ["/api/moderation"], method: "POST", roles: ["admin"] },
   { path: ["/api/music", "/api/voice", "/api/remote-access"], method: "POST", roles: ["admin"] },
   { path: ["/api/downloads"], method: "POST", roles: ["admin"] },
+  { path: ["/api/transcriptions"], method: "POST", roles: ["admin"] },
+  { path: ["/api/transcriptions"], method: "DELETE", roles: ["admin"] },
   { path: ["/api/music"], method: "DELETE", roles: ["admin"] },
 ];
 
@@ -753,6 +756,7 @@ async function handleGuildInfo(req, parts, client, auth) {
   if (!guild) return json({ error: "Guild not found" }, { status: 404 });
 
   if (sub === "voice-channels") return json(guild.channels.cache.filter((c) => c.isVoiceBased?.()).map((c) => ({ id: c.id, name: c.name })));
+  if (sub === "text-channels") return json(guild.channels.cache.filter((c) => c.isTextBased?.() && !c.isThread?.()).map((c) => ({ id: c.id, name: c.name })));
   if (sub === "members") {
     await guild.members.fetch().catch(() => {});
     return json(guild.members.cache
@@ -835,6 +839,94 @@ async function handleDownloads(req, url, auth, downloads) {
   return notAllowed("Разрешены только GET и POST");
 }
 
+async function handleTranscriptions(req, url, parts, client, auth, transcriptions) {
+  const id = parts[2];
+  const action = parts[3];
+  if (!id) {
+    const guildId = req.method === "GET" ? url.searchParams.get("guildId") : null;
+    if (req.method === "GET") {
+      if (!guildId) return json({ error: "guildId required" }, { status: 400 });
+      return json(transcriptions.status(guildId));
+    }
+    if (req.method === "POST") {
+      const body = await readJson(req);
+      const guild = client.guilds.cache.get(String(body.guildId || ""));
+      if (!guild) return json({ error: "Discord-сервер не найден." }, { status: 404 });
+      const voiceChannel = guild.channels.cache.get(String(body.voiceChannelId || ""));
+      const announceChannel = guild.channels.cache.get(String(body.announceChannelId || ""));
+      if (!voiceChannel?.isVoiceBased?.()) return json({ error: "Выберите голосовой канал." }, { status: 400 });
+      if (!announceChannel?.isTextBased?.()) return json({ error: "Выберите текстовый канал для уведомления." }, { status: 400 });
+      try {
+        const session = await transcriptions.start({
+          guild, voiceChannel, announceChannel,
+          language: body.language || "auto",
+          startedById: `panel:${auth.sessionId}`,
+          startedByTag: auth.accessSession?.email || "Веб-панель",
+        });
+        await announceChannel.send(
+          `🔴 **Транскрипция начата** в ${voiceChannel}. Инициатор: веб-панель. `
+          + `Аудиочанки хранятся 7 дней. ID: \`${session.id}\``
+        ).catch((error) => console.warn("[transcription] announcement:", error.message));
+        logAuditAction({
+          action: "transcription:start", actorSession: auth.sessionId, actorGuildId: guild.id,
+          actorIp: getClientIp(req), actorUserAgent: req.headers.get("user-agent"),
+          resource: `/transcriptions/${session.id}`, details: { voiceChannelId: voiceChannel.id, language: session.language },
+        });
+        return json(session, { status: 201 });
+      } catch (error) {
+        return json({ error: error.message }, { status: 400 });
+      }
+    }
+    return notAllowed("Разрешены GET и POST");
+  }
+
+  const session = transcriptions.details(id);
+  if (!session) return json({ error: "Сессия не найдена." }, { status: 404 });
+  if (action === "export" && req.method === "GET") {
+    try {
+      const format = url.searchParams.get("format") || "txt";
+      const exported = transcriptions.export(id, format);
+      return new Response(exported.content, {
+        headers: {
+          "content-type": format === "srt" ? "application/x-subrip; charset=utf-8" : "text/plain; charset=utf-8",
+          "content-disposition": `attachment; filename="${exported.filename}"`,
+          "cache-control": "no-store",
+        },
+      });
+    } catch (error) {
+      return json({ error: error.message }, { status: 400 });
+    }
+  }
+  if (action === "stop" && req.method === "POST") {
+    try {
+      const stopped = await transcriptions.stop(session.guildId);
+      const channel = client.guilds.cache.get(session.guildId)?.channels.cache.get(session.announceChannelId);
+      await channel?.send?.(`⏹️ Транскрипция \`${id}\` остановлена и финализируется.`).catch(() => {});
+      logAuditAction({
+        action: "transcription:stop", actorSession: auth.sessionId, actorGuildId: session.guildId,
+        actorIp: getClientIp(req), actorUserAgent: req.headers.get("user-agent"), resource: `/transcriptions/${id}`,
+      });
+      return json(stopped);
+    } catch (error) {
+      return json({ error: error.message }, { status: 400 });
+    }
+  }
+  if (!action && req.method === "GET") return json(session);
+  if (!action && req.method === "DELETE") {
+    try {
+      transcriptions.delete(id);
+      logAuditAction({
+        action: "transcription:delete", actorSession: auth.sessionId, actorGuildId: session.guildId,
+        actorIp: getClientIp(req), actorUserAgent: req.headers.get("user-agent"), resource: `/transcriptions/${id}`,
+      });
+      return json({ ok: true });
+    } catch (error) {
+      return json({ error: error.message }, { status: 400 });
+    }
+  }
+  return notFound();
+}
+
 async function handleAccessApi(req, url, access, context) {
   const headers = buildSecurityHeaders();
   if (url.pathname === "/api/access/me" && req.method === "GET") {
@@ -885,7 +977,7 @@ async function handleAccessApi(req, url, access, context) {
   return notFound();
 }
 
-async function handleApi(req, url, client, remote, access, context, downloads) {
+async function handleApi(req, url, client, remote, access, context, downloads, transcriptions) {
   const parts = url.pathname.split("/").filter(Boolean);
   const resource = parts[1];
   const headers = new Headers(buildSecurityHeaders());
@@ -910,6 +1002,7 @@ async function handleApi(req, url, client, remote, access, context, downloads) {
   if (resource === "stats") return await handleStats(req, parts, context);
   if (resource === "history") return await handleHistory(req, url, parts, context);
   if (resource === "downloads") return await handleDownloads(req, url, context, downloads);
+  if (resource === "transcriptions") return await handleTranscriptions(req, url, parts, client, context, transcriptions);
   if (resource === "csrf" && req.method === "GET") {
     if (!context?.csrf) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
     return json({ token: context.csrf }, { headers: Object.fromEntries(headers) });
@@ -973,6 +1066,7 @@ export function startWebServer(client, port = 8787, {
   accessControl = null,
   identitySecret = process.env.PROJECT_IDENTITY_SECRET || "",
   downloads = downloadService,
+  transcriptions = transcriptionService,
 } = {}) {
   const remote = new RemoteAccess({ port });
   const access = accessControl || new AccessControl({ publicBaseUrl: process.env.ACCESS_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL });
@@ -1119,7 +1213,7 @@ export function startWebServer(client, port = 8787, {
 
         if (url.pathname.startsWith("/api")) {
           if (!context && !local && !remoteAuth) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
-          const apiResponse = await handleApi(req, url, client, remote, access, context, downloads);
+          const apiResponse = await handleApi(req, url, client, remote, access, context, downloads, transcriptions);
           if (apiResponse) {
             if (apiResponse instanceof Response) {
               const next = new Headers(apiResponse.headers);

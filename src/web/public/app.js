@@ -353,7 +353,7 @@ document.getElementById("guildSelect").addEventListener("change", async (e) => {
   } catch {}
   lastQueueSignature = "";
   await settleTasks(
-    [loadStatus(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels()],
+    [loadStatus(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadTranscriptionChannels(), loadTranscriptions()],
     "guild-change",
   );
 });
@@ -1498,6 +1498,143 @@ document.getElementById("downloadsRefresh").addEventListener("click", () => {
   void loadDownloads().catch((err) => console.warn("[downloads]", err));
 });
 
+// --- Transcription -------------------------------------------------------
+
+let activeTranscriptionId = null;
+let transcriptionPollTimer = null;
+
+function transcriptClock(milliseconds) {
+  const total = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
+  return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+async function loadTranscriptionChannels() {
+  if (!state.guildId) return;
+  const [voice, text] = await Promise.all([
+    api(`/api/guilds/${state.guildId}/voice-channels`),
+    api(`/api/guilds/${state.guildId}/text-channels`),
+  ]);
+  for (const [selectId, channels] of [["transcriptionVoice", voice], ["transcriptionText", text]]) {
+    const select = document.getElementById(selectId);
+    const previous = select.value;
+    select.innerHTML = channels.map((channel) => `<option value="${escapeHtml(channel.id)}">${escapeHtml(channel.name)}</option>`).join("");
+    if (channels.some((channel) => channel.id === previous)) select.value = previous;
+  }
+}
+
+function renderTranscript(segments = []) {
+  const live = document.getElementById("transcriptionLive");
+  live.innerHTML = "";
+  if (!segments.length) {
+    live.innerHTML = '<span class="hint">Распознанный текст появится после первого минутного чанка.</span>';
+    return;
+  }
+  for (const segment of segments) {
+    const line = document.createElement("div");
+    line.className = `transcript-line${segment.aecConfidence != null && segment.aecConfidence < 0.12 ? " transcription-aec-low" : ""}`;
+    const time = document.createElement("span");
+    time.className = "transcript-time";
+    time.textContent = transcriptClock(segment.startMs);
+    const speaker = document.createElement("span");
+    speaker.className = "transcript-speaker";
+    speaker.textContent = segment.speakerName;
+    const textNode = document.createElement("span");
+    textNode.textContent = segment.text;
+    line.append(time, speaker, textNode);
+    live.appendChild(line);
+  }
+  live.scrollTop = live.scrollHeight;
+}
+
+function scheduleTranscriptionRefresh() {
+  if (transcriptionPollTimer) return;
+  transcriptionPollTimer = setTimeout(() => {
+    transcriptionPollTimer = null;
+    void loadTranscriptions().catch((error) => console.warn("[transcription]", error));
+  }, 5000);
+}
+
+async function loadTranscriptions() {
+  if (!state.guildId) return;
+  const data = await api(`/api/transcriptions?guildId=${encodeURIComponent(state.guildId)}`);
+  const active = data.active?.id ? data.active : null;
+  activeTranscriptionId = active?.id || null;
+  document.getElementById("transcriptionStart").disabled = Boolean(active);
+  document.getElementById("transcriptionStop").disabled = !active || active.status === "finalizing";
+  document.getElementById("transcriptionStatus").textContent = active
+    ? `🔴 ${active.status} · чанков ${active.chunks?.length || 0} · очередь worker ${data.workerQueue}`
+    : "Запись не активна.";
+  renderTranscript(active?.segments || []);
+  const tbody = document.getElementById("transcriptionSessions");
+  tbody.innerHTML = "";
+  for (const session of data.sessions || []) {
+    const row = document.createElement("tr");
+    for (const value of [fmtTime(session.startedAt), session.status, session.language]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    const exportsCell = document.createElement("td");
+    for (const format of ["txt", "srt"]) {
+      const link = document.createElement("a");
+      link.href = `/api/transcriptions/${encodeURIComponent(session.id)}/export?format=${format}`;
+      link.textContent = format.toUpperCase();
+      link.className = "button-link";
+      exportsCell.append(link, document.createTextNode(" "));
+    }
+    const actionCell = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Удалить";
+    remove.disabled = ["recording", "finalizing"].includes(session.status);
+    remove.addEventListener("click", async () => {
+      if (!confirm("Удалить текст и сохранённые аудиочанки этой сессии?")) return;
+      await api(`/api/transcriptions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+      await loadTranscriptions();
+    });
+    actionCell.appendChild(remove);
+    row.append(exportsCell, actionCell);
+    tbody.appendChild(row);
+  }
+  if (active) scheduleTranscriptionRefresh();
+}
+
+document.getElementById("transcriptionForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = document.getElementById("transcriptionStatus");
+  status.textContent = "Подключаю локальную модель…";
+  try {
+    await api("/api/transcriptions", {
+      method: "POST",
+      body: JSON.stringify({
+        guildId: state.guildId,
+        voiceChannelId: document.getElementById("transcriptionVoice").value,
+        announceChannelId: document.getElementById("transcriptionText").value,
+        language: document.getElementById("transcriptionLanguage").value,
+      }),
+    });
+    await loadTranscriptions();
+  } catch (error) {
+    status.textContent = "Ошибка: " + error.message;
+  }
+});
+
+document.getElementById("transcriptionStop").addEventListener("click", async () => {
+  if (!activeTranscriptionId) return;
+  const status = document.getElementById("transcriptionStatus");
+  status.textContent = "Останавливаю и закрываю последний чанк…";
+  try {
+    await api(`/api/transcriptions/${encodeURIComponent(activeTranscriptionId)}/stop`, { method: "POST", body: "{}" });
+    await loadTranscriptions();
+  } catch (error) {
+    status.textContent = "Ошибка: " + error.message;
+  }
+});
+
+document.getElementById("transcriptionRefresh").addEventListener("click", () => {
+  void loadTranscriptions().catch((error) => console.warn("[transcription]", error));
+});
+
 // --- Boot --------------------------------------------------------------
 
 (async function boot() {
@@ -1505,7 +1642,7 @@ document.getElementById("downloadsRefresh").addEventListener("click", () => {
     await loadAccessIdentity();
     await loadStatus();
     await settleTasks(
-      [loadConfigEditor(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadDownloads()],
+      [loadConfigEditor(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadDownloads(), loadTranscriptionChannels(), loadTranscriptions()],
       "boot",
     );
     await loadVoiceMembers();

@@ -123,6 +123,60 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transcription_sessions (
+    id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    voice_channel_id TEXT NOT NULL,
+    announce_channel_id TEXT,
+    status TEXT NOT NULL,
+    language TEXT NOT NULL DEFAULT 'auto',
+    started_by_id TEXT NOT NULL,
+    started_by_tag TEXT,
+    started_at INTEGER NOT NULL,
+    stopped_at INTEGER,
+    audio_expires_at INTEGER NOT NULL,
+    audio_deleted_at INTEGER,
+    error TEXT
+  );
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transcription_chunks (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    directory TEXT NOT NULL,
+    speaker_count INTEGER NOT NULL DEFAULT 0,
+    aec_confidence REAL,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    processed_at INTEGER,
+    UNIQUE(session_id, chunk_index)
+  );
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transcription_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    speaker_name TEXT NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    language TEXT,
+    confidence REAL,
+    aec_applied INTEGER NOT NULL DEFAULT 0,
+    aec_confidence REAL,
+    created_at INTEGER NOT NULL
+  );
+`);
+
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_guild ON messages(guild_id, created_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);");
@@ -133,6 +187,9 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_mobile_sessions_expires_at ON mobile_ses
 db.exec("CREATE INDEX IF NOT EXISTS idx_queue_states_updated_at ON queue_states(updated_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_downloads_guild_created ON downloads(guild_id, created_at);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_music_history_guild_played ON music_history(guild_id, last_played_at);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_transcription_sessions_guild_started ON transcription_sessions(guild_id, started_at DESC);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_transcription_chunks_session_index ON transcription_chunks(session_id, chunk_index);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_transcription_segments_session_time ON transcription_segments(session_id, start_ms, id);");
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at)
@@ -567,6 +624,180 @@ export function deleteMusicHistoryRow(guildId, id) {
 
 export function clearMusicHistoryForGuild(guildId) {
   return clearMusicHistoryStmt.run({ $guildId: String(guildId) }).changes;
+}
+
+export function createTranscriptionSession(record) {
+  db.prepare(`
+    INSERT INTO transcription_sessions (
+      id, guild_id, voice_channel_id, announce_channel_id, status, language,
+      started_by_id, started_by_tag, started_at, audio_expires_at
+    ) VALUES ($id, $guildId, $voiceChannelId, $announceChannelId, $status, $language,
+      $startedById, $startedByTag, $startedAt, $audioExpiresAt)
+  `).run({
+    $id: record.id,
+    $guildId: record.guildId,
+    $voiceChannelId: record.voiceChannelId,
+    $announceChannelId: record.announceChannelId ?? null,
+    $status: record.status ?? "recording",
+    $language: record.language ?? "auto",
+    $startedById: record.startedById,
+    $startedByTag: record.startedByTag ?? null,
+    $startedAt: record.startedAt ?? Date.now(),
+    $audioExpiresAt: record.audioExpiresAt,
+  });
+}
+
+export function updateTranscriptionSession(id, changes = {}) {
+  const columns = {
+    status: "status", stoppedAt: "stopped_at", audioExpiresAt: "audio_expires_at",
+    audioDeletedAt: "audio_deleted_at", error: "error",
+  };
+  const sets = [];
+  const params = { $id: id };
+  for (const [key, column] of Object.entries(columns)) {
+    if (!Object.hasOwn(changes, key)) continue;
+    sets.push(`${column} = $${key}`);
+    params[`$${key}`] = changes[key] ?? null;
+  }
+  if (sets.length) db.prepare(`UPDATE transcription_sessions SET ${sets.join(", ")} WHERE id = $id`).run(params);
+}
+
+const transcriptionSessionSelect = `
+  SELECT id, guild_id as guildId, voice_channel_id as voiceChannelId,
+    announce_channel_id as announceChannelId, status, language,
+    started_by_id as startedById, started_by_tag as startedByTag,
+    started_at as startedAt, stopped_at as stoppedAt,
+    audio_expires_at as audioExpiresAt, audio_deleted_at as audioDeletedAt, error
+  FROM transcription_sessions`;
+
+export function getTranscriptionSession(id) {
+  return db.prepare(`${transcriptionSessionSelect} WHERE id = $id`).get({ $id: String(id) }) || null;
+}
+
+export function getActiveTranscriptionSession(guildId) {
+  return db.prepare(`${transcriptionSessionSelect} WHERE guild_id = $guildId AND status IN ('recording','finalizing') ORDER BY started_at DESC LIMIT 1`)
+    .get({ $guildId: String(guildId) }) || null;
+}
+
+export function listTranscriptionSessions(guildId, limit = 50) {
+  return db.prepare(`${transcriptionSessionSelect} WHERE guild_id = $guildId ORDER BY started_at DESC LIMIT $limit`)
+    .all({ $guildId: String(guildId), $limit: Math.min(Math.max(Number(limit) || 50, 1), 200) });
+}
+
+export function listExpiredTranscriptionAudio(now = Date.now(), limit = 100) {
+  return db.prepare(`${transcriptionSessionSelect}
+    WHERE audio_expires_at <= $now AND audio_deleted_at IS NULL
+      AND status NOT IN ('recording','finalizing')
+    ORDER BY audio_expires_at LIMIT $limit`)
+    .all({ $now: now, $limit: Math.min(Math.max(Number(limit) || 100, 1), 500) });
+}
+
+export function createTranscriptionChunk(record) {
+  db.prepare(`
+    INSERT INTO transcription_chunks (
+      id, session_id, chunk_index, status, start_ms, end_ms, directory,
+      speaker_count, created_at
+    ) VALUES ($id, $sessionId, $chunkIndex, $status, $startMs, $endMs, $directory,
+      $speakerCount, $createdAt)
+  `).run({
+    $id: record.id,
+    $sessionId: record.sessionId,
+    $chunkIndex: record.chunkIndex,
+    $status: record.status ?? "pending",
+    $startMs: record.startMs,
+    $endMs: record.endMs,
+    $directory: record.directory,
+    $speakerCount: record.speakerCount ?? 0,
+    $createdAt: record.createdAt ?? Date.now(),
+  });
+}
+
+export function updateTranscriptionChunk(id, changes = {}) {
+  const columns = {
+    status: "status", speakerCount: "speaker_count", aecConfidence: "aec_confidence",
+    error: "error", processedAt: "processed_at",
+  };
+  const sets = [];
+  const params = { $id: id };
+  for (const [key, column] of Object.entries(columns)) {
+    if (!Object.hasOwn(changes, key)) continue;
+    sets.push(`${column} = $${key}`);
+    params[`$${key}`] = changes[key] ?? null;
+  }
+  if (sets.length) db.prepare(`UPDATE transcription_chunks SET ${sets.join(", ")} WHERE id = $id`).run(params);
+}
+
+export function listTranscriptionChunks(sessionId) {
+  return db.prepare(`
+    SELECT id, session_id as sessionId, chunk_index as chunkIndex, status,
+      start_ms as startMs, end_ms as endMs, directory, speaker_count as speakerCount,
+      aec_confidence as aecConfidence, error, created_at as createdAt, processed_at as processedAt
+    FROM transcription_chunks WHERE session_id = $sessionId ORDER BY chunk_index
+  `).all({ $sessionId: String(sessionId) });
+}
+
+export function listPendingTranscriptionChunks() {
+  return db.prepare(`
+    SELECT id, session_id as sessionId, chunk_index as chunkIndex, status,
+      start_ms as startMs, end_ms as endMs, directory, speaker_count as speakerCount,
+      created_at as createdAt
+    FROM transcription_chunks WHERE status IN ('pending','processing') ORDER BY created_at
+  `).all();
+}
+
+export function insertTranscriptionSegments(sessionId, chunkId, segments = []) {
+  const insert = db.prepare(`
+    INSERT INTO transcription_segments (
+      session_id, chunk_id, speaker_id, speaker_name, start_ms, end_ms, text,
+      language, confidence, aec_applied, aec_confidence, created_at
+    ) VALUES ($sessionId, $chunkId, $speakerId, $speakerName, $startMs, $endMs, $text,
+      $language, $confidence, $aecApplied, $aecConfidence, $createdAt)
+  `);
+  const tx = db.transaction((rows) => {
+    db.prepare("DELETE FROM transcription_segments WHERE chunk_id = $chunkId").run({ $chunkId: chunkId });
+    for (const segment of rows) insert.run({
+      $sessionId: sessionId,
+      $chunkId: chunkId,
+      $speakerId: segment.speakerId,
+      $speakerName: segment.speakerName,
+      $startMs: Math.max(0, Math.round(segment.startMs)),
+      $endMs: Math.max(0, Math.round(segment.endMs)),
+      $text: String(segment.text || "").trim(),
+      $language: segment.language ?? null,
+      $confidence: Number.isFinite(segment.confidence) ? segment.confidence : null,
+      $aecApplied: segment.aecApplied ? 1 : 0,
+      $aecConfidence: Number.isFinite(segment.aecConfidence) ? segment.aecConfidence : null,
+      $createdAt: Date.now(),
+    });
+  });
+  tx(segments.filter((segment) => String(segment.text || "").trim()));
+}
+
+export function listTranscriptionSegments(sessionId) {
+  return db.prepare(`
+    SELECT id, session_id as sessionId, chunk_id as chunkId, speaker_id as speakerId,
+      speaker_name as speakerName, start_ms as startMs, end_ms as endMs, text,
+      language, confidence, aec_applied as aecApplied, aec_confidence as aecConfidence,
+      created_at as createdAt
+    FROM transcription_segments WHERE session_id = $sessionId ORDER BY start_ms, id
+  `).all({ $sessionId: String(sessionId) }).map((row) => ({ ...row, aecApplied: Boolean(row.aecApplied) }));
+}
+
+export function deleteTranscriptionSession(id) {
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM transcription_segments WHERE session_id = $id").run({ $id: id });
+    db.prepare("DELETE FROM transcription_chunks WHERE session_id = $id").run({ $id: id });
+    return db.prepare("DELETE FROM transcription_sessions WHERE id = $id").run({ $id: id }).changes;
+  });
+  return tx() > 0;
+}
+
+export function markInterruptedTranscriptionSessions(now = Date.now()) {
+  return db.prepare(`
+    UPDATE transcription_sessions SET status = 'interrupted', stopped_at = COALESCE(stopped_at, $now),
+      error = COALESCE(error, 'Процесс бота был перезапущен')
+    WHERE status IN ('recording','finalizing')
+  `).run({ $now: now }).changes;
 }
 
 function parseJsonOrNull(value) {

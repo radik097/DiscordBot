@@ -7,9 +7,11 @@ import {
   entersState,
 } from "@discordjs/voice";
 import { randomUUID } from "node:crypto";
+import { Transform } from "node:stream";
 import { getAudioStream } from "./source.js";
 import { saveQueueState, loadQueueState } from "./persistence.js";
 import { recordCachedTrack } from "./history.js";
+import { publishMusicReference } from "../transcription/reference.js";
 
 const IDLE_LEAVE_MS = 5 * 60 * 1000;
 const MAX_QUEUE_SIZE = 500;
@@ -55,6 +57,7 @@ class GuildQueue {
     this.playing = null;
     this.volume = getDefaultMusicVolumeRatio();
     this.connection = null;
+    this.voiceLeases = new Set();
     this.textChannelId = null;
     this.activePlaylist = null;
     this.idleTimer = null;
@@ -94,6 +97,7 @@ class GuildQueue {
     if (this.destroyed) throw new Error("Очередь уже завершена");
     if (this.connection) {
       if (this.connection.joinConfig.channelId !== voiceChannel.id) {
+        if (this.voiceLeases.size) throw new Error("Нельзя переместить бота: в текущем канале идёт транскрипция.");
         this.connection.rejoin({ channelId: voiceChannel.id });
       }
       return;
@@ -122,9 +126,25 @@ class GuildQueue {
           entersState(this.connection, VoiceConnectionStatus.Connecting, 5000),
         ]);
       } catch {
-        this.destroy();
+        this.destroy(true);
       }
     });
+  }
+
+  acquireVoiceLease(leaseId, voiceChannel) {
+    if (!leaseId) throw new Error("Не указан владелец voice-соединения.");
+    if (this.connection?.joinConfig?.channelId !== voiceChannel.id && (this.playing || this.tracks.length)) {
+      throw new Error("Музыка уже играет в другом голосовом канале. Запустите транскрипцию там же.");
+    }
+    this.connect(voiceChannel);
+    this.voiceLeases.add(String(leaseId));
+    this.clearIdleTimer();
+    return this.connection;
+  }
+
+  releaseVoiceLease(leaseId) {
+    this.voiceLeases.delete(String(leaseId));
+    if (!this.voiceLeases.size && !this.playing && !this.tracks.length) this.scheduleIdleLeave();
   }
 
   clearIdleTimer() {
@@ -134,6 +154,7 @@ class GuildQueue {
 
   scheduleIdleLeave() {
     this.clearIdleTimer();
+    if (this.voiceLeases.size) return;
     this.idleTimer = setTimeout(() => this.destroy(), IDLE_LEAVE_MS);
   }
 
@@ -380,7 +401,15 @@ class GuildQueue {
       this.currentProcess = child;
       this.currentQuality = quality;
       console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}" с ${this.playbackOffsetSec.toFixed(1)}с, quality=${quality}, type=${type}`);
-      const resource = createAudioResource(stream, {
+      const queue = this;
+      const referenceTap = new Transform({
+        transform(chunk, _encoding, callback) {
+          publishMusicReference(queue.guildId, chunk, queue.volume, Date.now());
+          callback(null, chunk);
+        },
+      });
+      stream.pipe(referenceTap);
+      const resource = createAudioResource(referenceTap, {
         inputType: type,
         inlineVolume: true,
         metadata: { queueId: next.queueId, generation },
@@ -468,8 +497,24 @@ class GuildQueue {
     };
   }
 
-  destroy() {
+  destroy(force = false) {
     if (this.destroyed) return;
+    if (!force && this.voiceLeases.size) {
+      this.playGeneration += 1;
+      this.stopStatsLogging();
+      this.killCurrentProcess();
+      this.tracks = [];
+      this.playing = null;
+      this.currentResource = null;
+      this.currentLocalFile = null;
+      this.currentStreamStats = null;
+      this.currentQuality = null;
+      this.playbackOffsetSec = 0;
+      this.activePlaylist = null;
+      this.player.stop(true);
+      scheduleQueueSave();
+      return;
+    }
     this.destroyed = true;
     this.playGeneration += 1;
     this.clearIdleTimer();
@@ -483,6 +528,7 @@ class GuildQueue {
     this.currentQuality = null;
     this.playbackOffsetSec = 0;
     this.activePlaylist = null;
+    this.voiceLeases.clear();
     this.stabilitySamples = [];
     this.lastTelemetrySample = null;
     try {

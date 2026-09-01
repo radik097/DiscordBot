@@ -44,6 +44,15 @@ services:
       DOWNLOAD_TIMEOUT_MS: ${DOWNLOAD_TIMEOUT_MS:-600000}
       COBALT_MUSIC_MAX_BYTES: ${COBALT_MUSIC_MAX_BYTES:-209715200}
       COBALT_MUSIC_TIMEOUT_MS: ${COBALT_MUSIC_TIMEOUT_MS:-600000}
+      TRANSCRIPTION_WORKER_URL: ${TRANSCRIPTION_WORKER_URL:-http://transcription-worker:8000}
+      TRANSCRIPTION_WORKER_TIMEOUT_MS: ${TRANSCRIPTION_WORKER_TIMEOUT_MS:-180000}
+      TRANSCRIPTION_CHUNK_MS: ${TRANSCRIPTION_CHUNK_MS:-60000}
+      TRANSCRIPTION_CHUNK_OVERLAP_MS: ${TRANSCRIPTION_CHUNK_OVERLAP_MS:-1000}
+      TRANSCRIPTION_JOB_ATTEMPTS: ${TRANSCRIPTION_JOB_ATTEMPTS:-3}
+      TRANSCRIPTION_JOB_RETRY_DELAY_MS: ${TRANSCRIPTION_JOB_RETRY_DELAY_MS:-1000}
+      TRANSCRIPTION_AUDIO_RETENTION_MS: ${TRANSCRIPTION_AUDIO_RETENTION_MS:-604800000}
+      TRANSCRIPTION_MAX_ACTIVE: ${TRANSCRIPTION_MAX_ACTIVE:-1}
+      TRANSCRIPTION_MAX_PENDING_CHUNKS: ${TRANSCRIPTION_MAX_PENDING_CHUNKS:-10}
 
     # Монтирование директорий для сохранения данных и конфига
     volumes:
@@ -86,6 +95,41 @@ services:
     depends_on:
       cobalt:
         condition: service_started
+      transcription-worker:
+        condition: service_healthy
+
+  transcription-worker:
+    build:
+      context: ./transcription-worker
+      dockerfile: Dockerfile
+    image: discord-bot-transcription-worker:small
+    container_name: discord-bot-transcription-worker
+    init: true
+    restart: unless-stopped
+    gpus: all
+    environment:
+      TRANSCRIPTION_DATA_ROOT: /data/transcriptions
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL_REVISION: ${WHISPER_MODEL_REVISION:-536b0662742c02347bc0e980a01041f333bce120}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cuda}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float16}
+      WHISPER_MODEL_CACHE: /models
+      WHISPER_LOCAL_FILES_ONLY: ${WHISPER_LOCAL_FILES_ONLY:-0}
+      AEC_MIN_CORRELATION: ${AEC_MIN_CORRELATION:-0.12}
+    expose:
+      - "8000"
+    volumes:
+      - ./data:/data
+      - whisper-models:/models
+    mem_limit: ${WHISPER_MEMORY_LIMIT:-4g}
+    cpus: ${WHISPER_CPU_LIMIT:-4.0}
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "2"
 
   # Cobalt is intentionally not published to the host or Internet. Only the
   # Discord bot can access it through the private Compose network.
@@ -157,3 +201,6 @@ services:
 networks:
   default:
     driver: bridge
+
+volumes:
+  whisper-models:

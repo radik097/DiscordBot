@@ -133,6 +133,63 @@ describe("web email access integration", () => {
     }
   });
 
+  test("starts and exports a transcription through the owner web panel", async () => {
+    const voiceChannel = { id: "voice-1", name: "Meeting", isVoiceBased: () => true, toString: () => "#Meeting" };
+    const messages = [];
+    const textChannel = {
+      id: "text-1", name: "transcripts", isTextBased: () => true, isThread: () => false,
+      send: async (message) => messages.push(message),
+    };
+    const guild = {
+      id: "guild-transcription",
+      channels: { cache: new Collection([[voiceChannel.id, voiceChannel], [textChannel.id, textChannel]]) },
+    };
+    const session = {
+      id: "00000000-0000-4000-8000-000000000001", guildId: guild.id,
+      announceChannelId: textChannel.id, language: "auto", status: "recording",
+    };
+    const transcriptions = {
+      status: () => ({ active: session, sessions: [session], workerQueue: 0 }),
+      start: async (request) => ({ ...session, language: request.language }),
+      details: () => session,
+      stop: async () => ({ ...session, status: "finalizing" }),
+      export: (_id, format) => ({ content: "[00:00:00] Алиса: Привет", filename: `transcript.${format}` }),
+      delete: () => true,
+    };
+    const isolatedAccess = new AccessControl({ dbPath: ":memory:", publicBaseUrl: "https://discord.example.com", ownerEmail: OWNER });
+    const isolatedClient = {
+      isReady: () => true,
+      user: { tag: "TestBot#0001" },
+      guilds: { cache: new Collection([[guild.id, guild]]) },
+    };
+    const isolated = startWebServer(isolatedClient, 0, {
+      accessControl: isolatedAccess, identitySecret: SECRET, transcriptions,
+    });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    try {
+      const owner = await fetch(`${isolatedBase}/`, { redirect: "manual" });
+      const cookie = cookieFrom(owner);
+      const csrf = (await (await fetch(`${isolatedBase}/api/csrf`, { headers: { cookie } })).json()).token;
+      const started = await fetch(`${isolatedBase}/api/transcriptions`, {
+        method: "POST",
+        headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" },
+        body: JSON.stringify({ guildId: guild.id, voiceChannelId: voiceChannel.id, announceChannelId: textChannel.id, language: "ru" }),
+      });
+      expect(started.status).toBe(201);
+      expect(await started.json()).toMatchObject({ id: session.id, language: "ru" });
+      expect(messages[0]).toContain("Транскрипция начата");
+
+      const exported = await fetch(`${isolatedBase}/api/transcriptions/${session.id}/export?format=srt`, { headers: { cookie } });
+      expect(exported.status).toBe(200);
+      expect(exported.headers.get("content-type")).toContain("application/x-subrip");
+      expect(await exported.text()).toContain("Алиса: Привет");
+    } finally {
+      await isolated.stopRemoteAccess();
+      isolated.stopPanel();
+      isolated.stop(true);
+    }
+  });
+
   test("streams the current cached track through the authenticated monitor endpoint", async () => {
     const guildId = `monitor-${crypto.randomUUID()}`;
     const filePath = join(AUDIO_CACHE_DIR, `${guildId}.wav`);

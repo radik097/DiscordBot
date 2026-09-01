@@ -8,6 +8,7 @@ import { startWebServer } from "./web/server.js";
 import { saveAllQueues, restoreQueueState } from "./music/queue.js";
 import { resumePlaylistSaveJobs } from "./music/library.js";
 import { resolveRuntimeConfig } from "./runtimeConfig.js";
+import { transcriptionService } from "./transcription/service.js";
 
 process.env.FFMPEG_PATH ??= ffmpegPath;
 
@@ -68,6 +69,9 @@ client.once("clientReady", async () => {
   console.log(`Вошёл как ${client.user.tag}`);
   await restoreQueueState(client);
   resumePlaylistSaveJobs();
+  transcriptionService.cleanupExpired();
+  transcriptionService.resumePending();
+  setInterval(() => transcriptionService.cleanupExpired(), 60 * 60_000).unref?.();
   webServer = startWebServer(client, WEB_PORT ? Number(WEB_PORT) : 8787);
 });
 
@@ -188,6 +192,7 @@ async function shutdown(reason, exitCode = 0) {
   shuttingDown = true;
   console.log(`[shutdown] ${reason}, сохраняю состояние и завершаю работу...`);
   saveAllQueues();
+  await transcriptionService.shutdown();
   await webServer?.stopRemoteAccess?.();
   webServer?.stop?.();
   try {

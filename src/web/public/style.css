@@ -591,11 +591,21 @@ button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
 #downloadResult a { color: var(--md-primary); }
 #downloadQueue { white-space: pre-line; margin-bottom: 14px; }
 .table-scroll { max-width: 100%; overflow-x: auto; }
+.transcription-form { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)) auto; gap: 8px; align-items: end; margin-bottom: 12px; }
+.transcription-form label { display: grid; gap: 4px; color: var(--md-on-surface-muted); font-size: 12px; }
+.transcription-live { display: grid; gap: 7px; max-height: 300px; overflow-y: auto; margin: 12px 0; padding: 10px; border: 1px solid var(--md-outline); border-radius: var(--r-sm); background: rgba(0, 0, 0, 0.14); }
+.transcript-line { display: grid; grid-template-columns: 82px minmax(90px, auto) 1fr; gap: 8px; align-items: start; }
+.transcript-time { color: var(--md-on-surface-muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+.transcript-speaker { color: var(--md-primary); font-weight: 600; }
+.transcription-aec-low { border-left: 3px solid var(--md-warning); padding-left: 6px; }
 
 @media (max-width: 760px) {
   .download-form { grid-template-columns: 1fr 1fr; }
   .download-form .download-url { grid-column: 1 / -1; }
   .download-form button { grid-column: 1 / -1; }
+  .transcription-form { grid-template-columns: 1fr; }
+  .transcript-line { grid-template-columns: 76px 1fr; }
+  .transcript-line > :last-child { grid-column: 1 / -1; }
 }
 
 .status-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }

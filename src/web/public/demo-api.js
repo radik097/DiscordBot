@@ -117,6 +117,8 @@
   let activePlaylistId = "demo-playlist-focus";
   let phoneEnabled = false;
   let phoneDevices = [];
+  let demoTranscription = null;
+  let demoTranscriptionSessions = [];
 
   function elapsed() {
     if (!current) return 0;
@@ -182,6 +184,10 @@
     if (/^\/api\/guilds\/[^/]+\/voice-channels$/.test(path)) return json([
       { id: "demo-voice-lounge", name: "Lounge" },
       { id: "demo-voice-focus", name: "Фокус" },
+    ]);
+    if (/^\/api\/guilds\/[^/]+\/text-channels$/.test(path)) return json([
+      { id: "demo-text-general", name: "общий" },
+      { id: "demo-text-log", name: "бот-лог" },
     ]);
     if (/^\/api\/guilds\/[^/]+\/members$/.test(path)) return json(copy(members));
 
@@ -296,6 +302,39 @@
       history: [{ id: "demo-download", userTag: "DemoUser#0001", sourceHost: "youtube.com", status: "linked", sizeBytes: 31457280, createdAt: now() - 120000 }],
       available: [{ id: "demo-download", filename: "demo-video.mp4", size: 31457280, expiresAt: now() + 1800000, url: "#demo-download" }],
     });
+
+    if (path === "/api/transcriptions" && method === "POST") {
+      const id = `00000000-0000-4000-8000-${String(now()).slice(-12)}`;
+      demoTranscription = {
+        id, guildId: DEMO_GUILD_ID, status: "recording", language: body.language || "auto",
+        startedAt: now(), chunks: [], segments: [],
+      };
+      demoTranscriptionSessions.unshift(copy(demoTranscription));
+      return json(copy(demoTranscription), 201);
+    }
+    if (path === "/api/transcriptions" && method === "GET") return json({
+      active: demoTranscription ? copy(demoTranscription) : null,
+      workerQueue: 0,
+      sessions: copy(demoTranscriptionSessions),
+    });
+    const demoTranscriptionStop = path.match(/^\/api\/transcriptions\/([^/]+)\/stop$/);
+    if (demoTranscriptionStop && method === "POST") {
+      if (!demoTranscription) return json({ error: "Демо-запись не активна." }, 400);
+      demoTranscription.status = "completed";
+      demoTranscription.segments = [
+        { id: 1, startMs: 1200, endMs: 4600, speakerName: "DemoUser", text: "Это пример локальной транскрипции.", aecApplied: true, aecConfidence: 0.74 },
+        { id: 2, startMs: 5100, endMs: 8200, speakerName: "SampleMod", text: "Музыка бота исключена из текста.", aecApplied: true, aecConfidence: 0.68 },
+      ];
+      demoTranscriptionSessions[0] = copy(demoTranscription);
+      const result = copy(demoTranscription);
+      demoTranscription = null;
+      return json(result);
+    }
+    const demoTranscriptionDelete = path.match(/^\/api\/transcriptions\/([^/]+)$/);
+    if (demoTranscriptionDelete && method === "DELETE") {
+      demoTranscriptionSessions = demoTranscriptionSessions.filter((session) => session.id !== demoTranscriptionDelete[1]);
+      return json({ ok: true });
+    }
 
     if (path === "/api/remote-access" && method === "GET") return json({
       enabled: phoneEnabled,

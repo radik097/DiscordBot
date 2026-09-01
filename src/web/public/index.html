@@ -311,6 +311,35 @@
     </div>
   </article>
 
+  <article class="panel" data-panel="transcription" data-icon="📝" data-title="Транскрипция">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">📝</span>
+      <span class="panel-title">Транскрипция</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <form id="transcriptionForm" class="transcription-form">
+        <label>Голосовой канал<select id="transcriptionVoice" required></select></label>
+        <label>Канал уведомлений<select id="transcriptionText" required></select></label>
+        <label>Язык<select id="transcriptionLanguage"><option value="auto">Авто RU/EN</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+        <button id="transcriptionStart" type="submit" class="primary">🔴 Начать</button>
+      </form>
+      <div class="actions">
+        <button id="transcriptionStop" type="button" class="danger" disabled>⏹️ Остановить</button>
+        <button id="transcriptionRefresh" type="button">Обновить</button>
+        <span id="transcriptionStatus" class="hint">Запись не активна.</span>
+      </div>
+      <div id="transcriptionLive" class="transcription-live"><span class="hint">Распознанный текст появится после первого минутного чанка.</span></div>
+      <h3>Сессии</h3>
+      <div class="table-scroll"><table class="datatable"><thead><tr><th>Начало</th><th>Статус</th><th>Язык</th><th>Экспорт</th><th></th></tr></thead><tbody id="transcriptionSessions"></tbody></table></div>
+    </div>
+  </article>
+
   <article class="panel" data-panel="downloads" data-icon="⬇️" data-title="Загрузки">
     <header class="panel-header">
       <span class="drag-handle" title="Перетащить">⠿</span>
@@ -424,6 +453,7 @@
     <button type="button" data-mobile-panel="stats">📊 Статистика</button>
     <button type="button" data-mobile-panel="history">🗒️ История</button>
     <button type="button" data-mobile-panel="cache-history">🕘 История песен</button>
+    <button type="button" data-mobile-panel="transcription">📝 Транскрипция</button>
     <button type="button" data-mobile-panel="downloads">⬇️ Загрузки</button>
   </div>
 </div>
