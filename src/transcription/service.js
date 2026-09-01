@@ -17,6 +17,7 @@ import {
 import { getQueue } from "../music/queue.js";
 import { exportTranscript, transcriptFilename } from "./export.js";
 import { registerMusicReferenceSink, scalePcm16le } from "./reference.js";
+import { transcriptionSettings } from "./settings.js";
 import { transcriptionWorker } from "./workerClient.js";
 
 export const TRANSCRIPTION_ROOT = new URL("../../data/transcriptions/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -81,6 +82,7 @@ export class TranscriptionService {
   constructor({
     root = TRANSCRIPTION_ROOT,
     worker = transcriptionWorker,
+    settings = transcriptionSettings,
     queueProvider = getQueue,
     chunkMs = Number(process.env.TRANSCRIPTION_CHUNK_MS) || DEFAULT_CHUNK_MS,
     overlapMs = Number(process.env.TRANSCRIPTION_CHUNK_OVERLAP_MS) || DEFAULT_OVERLAP_MS,
@@ -92,6 +94,7 @@ export class TranscriptionService {
   } = {}) {
     this.root = resolve(root);
     this.worker = worker;
+    this.settings = settings;
     this.queueProvider = queueProvider;
     this.chunkMs = Math.max(1000, chunkMs);
     this.overlapMs = Math.max(0, Math.min(Number(overlapMs) || 0, this.chunkMs / 4));
@@ -106,12 +109,25 @@ export class TranscriptionService {
     mkdirSync(this.root, { recursive: true });
   }
 
-  async start({ guild, voiceChannel, announceChannel = null, language = "auto", startedById, startedByTag }) {
+  async configuration() {
+    return { ...this.settings.view(), worker: await this.worker.health() };
+  }
+
+  async updateConfiguration(changes) {
+    const view = this.settings.update(changes);
+    const profile = this.settings.resolve(view.provider, view.model);
+    const prepared = typeof this.worker.prepare === "function" ? await this.worker.prepare(profile) : null;
+    return { ...view, worker: { ...(await this.worker.health()), prepared } };
+  }
+
+  async start({ guild, voiceChannel, announceChannel = null, language = "auto", provider, model, startedById, startedByTag }) {
     if (!guild?.id || !voiceChannel?.id) throw new Error("Выберите голосовой канал.");
     if (this.active.has(guild.id) || getActiveTranscriptionSession(guild.id)) throw new Error("На сервере уже идёт транскрипция.");
     if (this.active.size >= this.maxActive) throw new Error("Достигнут лимит одновременных транскрипций.");
+    const profile = this.settings.resolve(provider, model);
     const health = await this.worker.health();
-    if (!health?.ready) throw new Error(`Локальная модель Whisper недоступна${health?.error ? `: ${health.error}` : "."}`);
+    if (!health?.ready) throw new Error(`Worker транскрипции недоступен${health?.error ? `: ${health.error}` : "."}`);
+    if (typeof this.worker.prepare === "function") await this.worker.prepare(profile);
 
     const id = randomUUID();
     const startedAt = this.now();
@@ -120,7 +136,8 @@ export class TranscriptionService {
     const state = {
       id, guild, queue, voiceChannelId: voiceChannel.id,
       announceChannelId: announceChannel?.id ?? null,
-      language: boundedLanguage(language), startedAt, chunkIndex: 0,
+      language: boundedLanguage(language), provider: profile.provider, model: profile.model,
+      startedAt, chunkIndex: 0,
       speakers: new Map(), decoders: new Map(), subscriptions: new Map(),
       pendingJobs: 0, stopped: false, timer: null, unregisterReference: null,
     };
@@ -128,6 +145,7 @@ export class TranscriptionService {
       createTranscriptionSession({
         id, guildId: guild.id, voiceChannelId: voiceChannel.id,
         announceChannelId: state.announceChannelId, language: state.language,
+        provider: state.provider, model: state.model,
         startedById, startedByTag, startedAt, audioExpiresAt: startedAt + this.retentionMs,
       });
       this.#openChunk(state, startedAt, startedAt + this.chunkMs);
@@ -245,7 +263,7 @@ export class TranscriptionService {
       startMs: current.startedAt - state.startedAt,
       endMs: endedAt - state.startedAt,
       keepFromMs: current.keepFromMs,
-      language: state.language, speakers,
+      language: state.language, provider: state.provider, model: state.model, speakers,
       referenceFile: current.reference?.hasAudio ? `${relativeDirectory}/music.s16le` : null,
     };
     writeFileSync(resolve(current.directory, "job.json"), JSON.stringify(metadata, null, 2));
@@ -283,7 +301,8 @@ export class TranscriptionService {
     let terminal = false;
     updateTranscriptionChunk(metadata.chunkId, { status: "processing", error: null });
     try {
-      const result = await this.worker.transcribe({ ...metadata, root: "/data/transcriptions" });
+      const profile = this.settings.resolve(metadata.provider, metadata.model);
+      const result = await this.worker.transcribe({ ...metadata, root: "/data/transcriptions" }, profile);
       const segments = (result.segments || []).map((segment) => ({
         ...segment,
         startMs: metadata.startMs + Number(segment.startMs || 0),

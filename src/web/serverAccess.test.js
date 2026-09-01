@@ -146,15 +146,26 @@ describe("web email access integration", () => {
     };
     const session = {
       id: "00000000-0000-4000-8000-000000000001", guildId: guild.id,
-      announceChannelId: textChannel.id, language: "auto", status: "recording",
+      announceChannelId: textChannel.id, language: "auto", provider: "local", model: "small", status: "recording",
     };
+    let settingsUpdate = null;
     const transcriptions = {
       status: () => ({ active: session, sessions: [session], workerQueue: 0 }),
-      start: async (request) => ({ ...session, language: request.language }),
+      start: async (request) => ({ ...session, language: request.language, provider: request.provider || "local", model: request.model || "small" }),
       details: () => session,
       stop: async () => ({ ...session, status: "finalizing" }),
       export: (_id, format) => ({ content: "[00:00:00] Алиса: Привет", filename: `transcript.${format}` }),
       delete: () => true,
+      configuration: async () => ({
+        provider: "local", model: "small", catalog: [], keys: { openai: { configured: false } }, worker: { ready: true },
+      }),
+      updateConfiguration: async (request) => {
+        settingsUpdate = request;
+        return {
+          provider: request.provider, model: request.model, catalog: [],
+          keys: { openai: { configured: true, masked: "••••test", source: "panel" } }, worker: { ready: true },
+        };
+      },
     };
     const isolatedAccess = new AccessControl({ dbPath: ":memory:", publicBaseUrl: "https://discord.example.com", ownerEmail: OWNER });
     const isolatedClient = {
@@ -173,11 +184,29 @@ describe("web email access integration", () => {
       const started = await fetch(`${isolatedBase}/api/transcriptions`, {
         method: "POST",
         headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" },
-        body: JSON.stringify({ guildId: guild.id, voiceChannelId: voiceChannel.id, announceChannelId: textChannel.id, language: "ru" }),
+        body: JSON.stringify({
+          guildId: guild.id, voiceChannelId: voiceChannel.id, announceChannelId: textChannel.id,
+          language: "ru", provider: "openai", model: "gpt-4o-mini-transcribe",
+        }),
       });
       expect(started.status).toBe(201);
-      expect(await started.json()).toMatchObject({ id: session.id, language: "ru" });
+      expect(await started.json()).toMatchObject({
+        id: session.id, language: "ru", provider: "openai", model: "gpt-4o-mini-transcribe",
+      });
       expect(messages[0]).toContain("Транскрипция начата");
+
+      const settings = await fetch(`${isolatedBase}/api/transcription-settings`, { headers: { cookie } });
+      expect(settings.status).toBe(200);
+      const updatedSettings = await fetch(`${isolatedBase}/api/transcription-settings`, {
+        method: "PUT",
+        headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "openai", model: "gpt-4o-mini-transcribe", keys: { openai: "private-test-key" },
+        }),
+      });
+      expect(updatedSettings.status).toBe(200);
+      expect(JSON.stringify(await updatedSettings.json())).not.toContain("private-test-key");
+      expect(settingsUpdate.keys.openai).toBe("private-test-key");
 
       const exported = await fetch(`${isolatedBase}/api/transcriptions/${session.id}/export?format=srt`, { headers: { cookie } });
       expect(exported.status).toBe(200);

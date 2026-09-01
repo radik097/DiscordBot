@@ -131,6 +131,8 @@ db.exec(`
     announce_channel_id TEXT,
     status TEXT NOT NULL,
     language TEXT NOT NULL DEFAULT 'auto',
+    provider TEXT NOT NULL DEFAULT 'local',
+    model TEXT NOT NULL DEFAULT 'small',
     started_by_id TEXT NOT NULL,
     started_by_tag TEXT,
     started_at INTEGER NOT NULL,
@@ -140,6 +142,16 @@ db.exec(`
     error TEXT
   );
 `);
+
+const transcriptionSessionColumns = new Set(
+  db.prepare("PRAGMA table_info(transcription_sessions)").all().map((column) => column.name),
+);
+if (!transcriptionSessionColumns.has("provider")) {
+  db.exec("ALTER TABLE transcription_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'local'");
+}
+if (!transcriptionSessionColumns.has("model")) {
+  db.exec("ALTER TABLE transcription_sessions ADD COLUMN model TEXT NOT NULL DEFAULT 'small'");
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS transcription_chunks (
@@ -630,8 +642,8 @@ export function createTranscriptionSession(record) {
   db.prepare(`
     INSERT INTO transcription_sessions (
       id, guild_id, voice_channel_id, announce_channel_id, status, language,
-      started_by_id, started_by_tag, started_at, audio_expires_at
-    ) VALUES ($id, $guildId, $voiceChannelId, $announceChannelId, $status, $language,
+      provider, model, started_by_id, started_by_tag, started_at, audio_expires_at
+    ) VALUES ($id, $guildId, $voiceChannelId, $announceChannelId, $status, $language, $provider, $model,
       $startedById, $startedByTag, $startedAt, $audioExpiresAt)
   `).run({
     $id: record.id,
@@ -640,6 +652,8 @@ export function createTranscriptionSession(record) {
     $announceChannelId: record.announceChannelId ?? null,
     $status: record.status ?? "recording",
     $language: record.language ?? "auto",
+    $provider: record.provider ?? "local",
+    $model: record.model ?? "small",
     $startedById: record.startedById,
     $startedByTag: record.startedByTag ?? null,
     $startedAt: record.startedAt ?? Date.now(),
@@ -664,7 +678,7 @@ export function updateTranscriptionSession(id, changes = {}) {
 
 const transcriptionSessionSelect = `
   SELECT id, guild_id as guildId, voice_channel_id as voiceChannelId,
-    announce_channel_id as announceChannelId, status, language,
+    announce_channel_id as announceChannelId, status, language, provider, model,
     started_by_id as startedById, started_by_tag as startedByTag,
     started_at as startedAt, stopped_at as stoppedAt,
     audio_expires_at as audioExpiresAt, audio_deleted_at as audioDeletedAt, error

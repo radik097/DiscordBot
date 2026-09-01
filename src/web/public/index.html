@@ -328,6 +328,8 @@
         <label>Голосовой канал<select id="transcriptionVoice" required></select></label>
         <label>Канал уведомлений<select id="transcriptionText" required></select></label>
         <label>Язык<select id="transcriptionLanguage"><option value="auto">Авто RU/EN</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+        <label>Провайдер<select id="transcriptionProvider" required></select></label>
+        <label>Модель<select id="transcriptionModel" required></select></label>
         <button id="transcriptionStart" type="submit" class="primary">🔴 Начать</button>
       </form>
       <div class="actions">
@@ -337,7 +339,35 @@
       </div>
       <div id="transcriptionLive" class="transcription-live"><span class="hint">Распознанный текст появится после первого минутного чанка.</span></div>
       <h3>Сессии</h3>
-      <div class="table-scroll"><table class="datatable"><thead><tr><th>Начало</th><th>Статус</th><th>Язык</th><th>Экспорт</th><th></th></tr></thead><tbody id="transcriptionSessions"></tbody></table></div>
+      <div class="table-scroll"><table class="datatable"><thead><tr><th>Начало</th><th>Статус</th><th>Язык</th><th>Модель</th><th>Экспорт</th><th></th></tr></thead><tbody id="transcriptionSessions"></tbody></table></div>
+    </div>
+  </article>
+
+  <article class="panel" data-panel="transcription-settings" data-icon="🔑" data-title="Модели и ключи">
+    <header class="panel-header">
+      <span class="drag-handle" title="Перетащить">⠿</span>
+      <span class="panel-icon">🔑</span>
+      <span class="panel-title">Модели и ключи</span>
+      <span class="panel-controls">
+        <button class="pin-btn" title="Закрепить">📌</button>
+        <button class="collapse-btn" title="Свернуть">▾</button>
+        <button class="close-btn" title="Скрыть">✕</button>
+      </span>
+    </header>
+    <div class="panel-body">
+      <p class="hint">Локальные модели скачиваются автоматически в Docker volume при сохранении. Облачные ключи шифруются на диске и никогда не показываются повторно.</p>
+      <form id="transcriptionSettingsForm" class="transcription-settings-form">
+        <label>Провайдер по умолчанию<select id="transcriptionDefaultProvider" required></select></label>
+        <label>Модель по умолчанию<select id="transcriptionDefaultModel" required></select></label>
+        <label>OpenAI API key<input id="transcriptionOpenAiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="Оставьте пустым, чтобы сохранить текущий"></label>
+        <label>Mistral API key<input id="transcriptionMistralKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="Оставьте пустым, чтобы сохранить текущий"></label>
+        <label class="secret-clear"><input id="transcriptionClearOpenAi" type="checkbox"> удалить сохранённый OpenAI key</label>
+        <label class="secret-clear"><input id="transcriptionClearMistral" type="checkbox"> удалить сохранённый Mistral key</label>
+        <button id="transcriptionSettingsSave" type="submit" class="primary">Сохранить и подготовить модель</button>
+      </form>
+      <div id="transcriptionKeyStatus" class="download-settings"></div>
+      <div id="transcriptionSettingsStatus" class="hint">Загрузка настроек…</div>
+      <p class="hint">При выборе облака очищенный голосовой чанк отправляется выбранному провайдеру. Возможна тарификация согласно вашему аккаунту.</p>
     </div>
   </article>
 
@@ -455,6 +485,7 @@
     <button type="button" data-mobile-panel="history">🗒️ История</button>
     <button type="button" data-mobile-panel="cache-history">🕘 История песен</button>
     <button type="button" data-mobile-panel="transcription">📝 Транскрипция</button>
+    <button type="button" data-mobile-panel="transcription-settings">🔑 Модели и ключи</button>
     <button type="button" data-mobile-panel="downloads">⬇️ Загрузки</button>
   </div>
 </div>

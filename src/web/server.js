@@ -58,6 +58,7 @@ const roleByRoute = [
   { path: ["/api/downloads"], method: "POST", roles: ["admin"] },
   { path: ["/api/transcriptions"], method: "POST", roles: ["admin"] },
   { path: ["/api/transcriptions"], method: "DELETE", roles: ["admin"] },
+  { path: ["/api/transcription-settings"], method: "PUT", roles: ["admin"] },
   { path: ["/api/music"], method: "DELETE", roles: ["admin"] },
 ];
 
@@ -861,17 +862,22 @@ async function handleTranscriptions(req, url, parts, client, auth, transcription
         const session = await transcriptions.start({
           guild, voiceChannel, announceChannel,
           language: body.language || "auto",
+          provider: body.provider,
+          model: body.model,
           startedById: `panel:${auth.sessionId}`,
           startedByTag: auth.accessSession?.email || "Веб-панель",
         });
         await announceChannel.send(
           `🔴 **Транскрипция начата** в ${voiceChannel}. Инициатор: веб-панель. `
-          + `Аудиочанки хранятся 7 дней. ID: \`${session.id}\``
+          + `Модель: **${session.provider}/${session.model}**. Аудиочанки хранятся 7 дней. ID: \`${session.id}\``
         ).catch((error) => console.warn("[transcription] announcement:", error.message));
         logAuditAction({
           action: "transcription:start", actorSession: auth.sessionId, actorGuildId: guild.id,
           actorIp: getClientIp(req), actorUserAgent: req.headers.get("user-agent"),
-          resource: `/transcriptions/${session.id}`, details: { voiceChannelId: voiceChannel.id, language: session.language },
+          resource: `/transcriptions/${session.id}`, details: {
+            voiceChannelId: voiceChannel.id, language: session.language,
+            provider: session.provider, model: session.model,
+          },
         });
         return json(session, { status: 201 });
       } catch (error) {
@@ -926,6 +932,40 @@ async function handleTranscriptions(req, url, parts, client, auth, transcription
     }
   }
   return notFound();
+}
+
+async function handleTranscriptionSettings(req, auth, transcriptions) {
+  if (!hasRole(auth, ["admin"])) return notAllowed("Настройки облачных ключей доступны только владельцу.");
+  if (req.method === "GET") {
+    try {
+      return json(await transcriptions.configuration());
+    } catch (error) {
+      return json({ error: error.message }, { status: 503 });
+    }
+  }
+  if (req.method === "PUT") {
+    try {
+      const body = await readJson(req);
+      const result = await transcriptions.updateConfiguration({
+        provider: body.provider,
+        model: body.model,
+        keys: {
+          openai: typeof body.keys?.openai === "string" ? body.keys.openai : "",
+          mistral: typeof body.keys?.mistral === "string" ? body.keys.mistral : "",
+        },
+        clear: Array.isArray(body.clear) ? body.clear.filter((name) => ["openai", "mistral"].includes(name)) : [],
+      });
+      logAuditAction({
+        action: "transcription:settings", actorSession: auth.sessionId,
+        actorIp: getClientIp(req), actorUserAgent: req.headers.get("user-agent"),
+        resource: "/transcription-settings", details: { provider: result.provider, model: result.model },
+      });
+      return json(result);
+    } catch (error) {
+      return json({ error: error.message }, { status: 400 });
+    }
+  }
+  return notAllowed("Разрешены GET и PUT");
 }
 
 async function handleAccessApi(req, url, access, context) {
@@ -1004,6 +1044,7 @@ async function handleApi(req, url, client, remote, access, context, downloads, t
   if (resource === "history") return await handleHistory(req, url, parts, context);
   if (resource === "downloads") return await handleDownloads(req, url, context, downloads);
   if (resource === "transcriptions") return await handleTranscriptions(req, url, parts, client, context, transcriptions);
+  if (resource === "transcription-settings") return await handleTranscriptionSettings(req, context, transcriptions);
   if (resource === "csrf" && req.method === "GET") {
     if (!context?.csrf) return json({ error: "Требуется авторизация" }, { status: 401, headers: Object.fromEntries(headers) });
     return json({ token: context.csrf }, { headers: Object.fromEntries(headers) });

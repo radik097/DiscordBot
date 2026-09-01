@@ -1,6 +1,7 @@
 import { MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { hasBotOperatorRole } from "./phone.js";
 import { transcriptionService } from "../transcription/service.js";
+import { modelChoicesForDiscord } from "../transcription/modelCatalog.js";
 
 export function canUseTranscription(interaction) {
   return Boolean(
@@ -16,7 +17,7 @@ function latestSession(service, guildId) {
 export function createTranscribeCommand(service = transcriptionService) {
   const data = new SlashCommandBuilder()
     .setName("transcribe")
-    .setDescription("Локальная транскрипция голосового канала")
+    .setDescription("Транскрипция голосового канала")
     .setDMPermission(false)
     .addSubcommand((sub) => sub
       .setName("start")
@@ -25,6 +26,9 @@ export function createTranscribeCommand(service = transcriptionService) {
         { name: "Авто: русский или английский", value: "auto" },
         { name: "Русский", value: "ru" },
         { name: "English", value: "en" },
+      ))
+      .addStringOption((option) => option.setName("model").setDescription("Локальная или облачная модель").addChoices(
+        ...modelChoicesForDiscord(),
       )))
     .addSubcommand((sub) => sub.setName("status").setDescription("Показать статус транскрипции"))
     .addSubcommand((sub) => sub.setName("stop").setDescription("Остановить и финализировать транскрипцию"))
@@ -49,17 +53,20 @@ export function createTranscribeCommand(service = transcriptionService) {
       const voiceChannel = interaction.member.voice?.channel;
       if (!voiceChannel) return interaction.reply({ content: "Сначала войдите в голосовой канал.", flags: MessageFlags.Ephemeral });
       await interaction.deferReply();
+      const profile = String(interaction.options.getString("model") || "").split(":", 2);
       const session = await service.start({
         guild: interaction.guild,
         voiceChannel,
         announceChannel: interaction.channel,
         language: interaction.options.getString("language") || "auto",
+        provider: profile.length === 2 ? profile[0] : undefined,
+        model: profile.length === 2 ? profile[1] : undefined,
         startedById: interaction.user.id,
         startedByTag: interaction.user.tag,
       });
       return interaction.editReply(
         `🔴 **Транскрипция начата** в ${voiceChannel}. Инициатор: ${interaction.user}. `
-        + `Аудиочанки хранятся 7 дней. ID: \`${session.id}\``
+        + `Модель: **${session.provider}/${session.model}**. Аудиочанки хранятся 7 дней. ID: \`${session.id}\``
       );
     }
     if (subcommand === "stop") {
@@ -72,7 +79,7 @@ export function createTranscribeCommand(service = transcriptionService) {
       if (!status.active) return interaction.reply({ content: `Активной записи нет. Последних сессий: ${status.sessions.length}.`, flags: MessageFlags.Ephemeral });
       const session = service.details(status.active.id) || status.active;
       return interaction.reply({
-        content: `🔴 Сессия \`${session.id}\` · ${session.status} · чанков ${session.chunks?.length || 0} · очередь ${status.workerQueue}`,
+        content: `🔴 Сессия \`${session.id}\` · ${session.status} · ${session.provider}/${session.model} · чанков ${session.chunks?.length || 0} · очередь ${status.workerQueue}`,
         flags: MessageFlags.Ephemeral,
       });
     }

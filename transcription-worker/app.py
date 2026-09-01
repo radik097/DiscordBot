@@ -1,24 +1,38 @@
 import ctypes
+import gc
+import io
 import json
 import math
 import os
 import subprocess
+import wave
 from pathlib import Path
 from threading import Lock
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+import requests
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from faster_whisper import WhisperModel
 
 DATA_ROOT = Path(os.getenv("TRANSCRIPTION_DATA_ROOT", "/data/transcriptions")).resolve()
-MODEL_NAME = os.getenv("WHISPER_MODEL", "small")
-MODEL_REVISION = os.getenv("WHISPER_MODEL_REVISION") or {
+DEFAULT_MODEL = os.getenv("WHISPER_MODEL", "small")
+DEFAULT_MODEL_REVISION = os.getenv("WHISPER_MODEL_REVISION") or {
     "small": "536b0662742c02347bc0e980a01041f333bce120",
-}.get(MODEL_NAME)
+}.get(DEFAULT_MODEL)
 DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
 COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
 MODEL_CACHE = os.getenv("WHISPER_MODEL_CACHE", "/models")
+LOCAL_MODELS = {"tiny", "base", "small", "medium", "large-v3", "distil-large-v3"}
+CLOUD_MODELS = {
+    "openai": {"gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"},
+    "mistral": {"voxtral-mini-latest"},
+}
+CLOUD_ENDPOINTS = {
+    "openai": "https://api.openai.com/v1/audio/transcriptions",
+    "mistral": "https://api.mistral.ai/v1/audio/transcriptions",
+}
+CLOUD_TIMEOUT = max(30, int(os.getenv("TRANSCRIPTION_CLOUD_TIMEOUT_SECONDS", "180")))
 SAMPLE_RATE = 16_000
 FRAME_SAMPLES = 320
 AEC_TAIL_SAMPLES = 4_800
@@ -27,6 +41,7 @@ AEC_MIN_CORRELATION = float(os.getenv("AEC_MIN_CORRELATION", "0.12"))
 app = FastAPI(title="DiscordBot local transcription worker", docs_url=None, redoc_url=None)
 model_lock = Lock()
 model = None
+loaded_model_name = None
 model_error = None
 
 
@@ -49,22 +64,53 @@ class ChunkJob(BaseModel):
     root: str | None = None
 
 
-def load_model():
-    global model, model_error
+class ModelRequest(BaseModel):
+    provider: str = Field(pattern=r"^(local|openai|mistral)$")
+    model: str = Field(min_length=1, max_length=128)
+
+
+def validate_profile(provider: str, model_name: str):
+    if provider == "local":
+        if model_name not in LOCAL_MODELS:
+            raise HTTPException(400, "unsupported local transcription model")
+        return
+    if provider not in CLOUD_MODELS or model_name not in CLOUD_MODELS[provider]:
+        raise HTTPException(400, "unsupported cloud transcription model")
+
+
+def bearer_key(request: Request) -> str:
+    authorization = request.headers.get("authorization", "")
+    if not authorization.startswith("Bearer "):
+        return ""
+    return authorization[7:].strip()
+
+
+def ensure_local_model(model_name: str):
+    global model, loaded_model_name, model_error
+    validate_profile("local", model_name)
+    if model is not None and loaded_model_name == model_name:
+        return model
+    if model is not None:
+        model = None
+        loaded_model_name = None
+        gc.collect()
     try:
         model = WhisperModel(
-            MODEL_NAME,
+            model_name,
             device=DEVICE,
             compute_type=COMPUTE_TYPE,
             download_root=MODEL_CACHE,
             local_files_only=os.getenv("WHISPER_LOCAL_FILES_ONLY", "0") == "1",
-            revision=MODEL_REVISION,
+            revision=DEFAULT_MODEL_REVISION if model_name == DEFAULT_MODEL else None,
         )
+        loaded_model_name = model_name
+        model_error = None
+        return model
     except Exception as exc:  # health reports the exact local runtime problem
         model_error = str(exc)
-
-
-load_model()
+        model = None
+        loaded_model_name = None
+        raise
 
 
 def safe_path(relative_path: str) -> Path:
@@ -169,7 +215,7 @@ def archive_lossless(path: Path) -> str:
     return str(target.relative_to(DATA_ROOT)).replace("\\", "/")
 
 
-def transcribe_speaker(audio: np.ndarray, language_mode: str):
+def transcribe_local(audio: np.ndarray, language_mode: str, local_model):
     options = dict(
         vad_filter=True,
         vad_parameters={
@@ -183,34 +229,113 @@ def transcribe_speaker(audio: np.ndarray, language_mode: str):
         beam_size=5,
     )
     language = None if language_mode == "auto" else language_mode
-    segments, info = model.transcribe(audio, language=language, **options)
+    segments, info = local_model.transcribe(audio, language=language, **options)
     segments = list(segments)
     if language_mode == "auto" and info.language not in ("ru", "en"):
         probabilities = dict(info.all_language_probs or [])
         language = "ru" if probabilities.get("ru", 0) >= probabilities.get("en", 0) else "en"
-        segments, info = model.transcribe(audio, language=language, **options)
+        segments, info = local_model.transcribe(audio, language=language, **options)
         segments = list(segments)
-    return segments, info
+    return [{
+        "startMs": round(segment.start * 1000),
+        "endMs": round(segment.end * 1000),
+        "text": segment.text.strip(),
+        "language": info.language,
+        "confidence": max(0.0, min(1.0, math.exp(segment.avg_logprob))),
+    } for segment in segments if segment.text.strip()]
+
+
+def wav_bytes(audio: np.ndarray) -> bytes:
+    output = io.BytesIO()
+    pcm = np.clip(audio * 32767, -32768, 32767).astype("<i2")
+    with wave.open(output, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(SAMPLE_RATE)
+        writer.writeframes(pcm.tobytes())
+    return output.getvalue()
+
+
+def transcribe_cloud(audio: np.ndarray, language_mode: str, provider: str, model_name: str, api_key: str):
+    validate_profile(provider, model_name)
+    if not api_key:
+        raise HTTPException(400, "cloud provider API key is required")
+    data = {"model": model_name, "response_format": "json"}
+    if language_mode != "auto":
+        data["language"] = language_mode
+    try:
+        response = requests.post(
+            CLOUD_ENDPOINTS[provider],
+            headers={"Authorization": f"Bearer {api_key}"},
+            data=data,
+            files={"file": ("speaker.wav", wav_bytes(audio), "audio/wav")},
+            timeout=CLOUD_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"{provider} transcription request failed") from exc
+    if not response.ok:
+        raise HTTPException(502, f"{provider} transcription HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(502, f"{provider} returned invalid JSON") from exc
+    language = payload.get("language") or (language_mode if language_mode != "auto" else None)
+    result = []
+    for segment in payload.get("segments") or []:
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            continue
+        result.append({
+            "startMs": round(float(segment.get("start") or 0) * 1000),
+            "endMs": round(float(segment.get("end") or 0) * 1000),
+            "text": text,
+            "language": segment.get("language") or language,
+            "confidence": None,
+        })
+    text = str(payload.get("text") or "").strip()
+    if not result and text:
+        result.append({
+            "startMs": 0,
+            "endMs": round(audio.size / SAMPLE_RATE * 1000),
+            "text": text,
+            "language": language,
+            "confidence": None,
+            "coarse": True,
+        })
+    return result
 
 
 @app.get("/health")
 def health():
-    if model is None:
-        raise HTTPException(503, model_error or "model is not ready")
     return {
         "ready": True,
-        "model": MODEL_NAME,
-        "revision": MODEL_REVISION,
+        "defaultModel": DEFAULT_MODEL,
+        "loadedModel": loaded_model_name,
+        "revision": DEFAULT_MODEL_REVISION if loaded_model_name == DEFAULT_MODEL else None,
         "device": DEVICE,
         "computeType": COMPUTE_TYPE,
         "error": model_error,
     }
 
 
+@app.post("/v1/models/install")
+def install_model(selection: ModelRequest, request: Request):
+    validate_profile(selection.provider, selection.model)
+    if selection.provider != "local":
+        if not bearer_key(request):
+            raise HTTPException(400, "cloud provider API key is required")
+        return {"ready": True, "provider": selection.provider, "model": selection.model, "installed": False}
+    with model_lock:
+        ensure_local_model(selection.model)
+    return {"ready": True, "provider": "local", "model": selection.model, "installed": True}
+
+
 @app.post("/v1/chunks")
-def transcribe_chunk(job: ChunkJob):
-    if model is None:
-        raise HTTPException(503, model_error or "model is not ready")
+def transcribe_chunk(job: ChunkJob, request: Request):
+    provider = request.headers.get("x-transcription-provider", "local").strip().lower()
+    model_name = request.headers.get("x-transcription-model", DEFAULT_MODEL).strip()
+    validate_profile(provider, model_name)
+    api_key = bearer_key(request) if provider != "local" else ""
     speaker_paths = [
         (speaker, existing_audio_path(safe_path(speaker.file)))
         for speaker in job.speakers
@@ -227,6 +352,7 @@ def transcribe_chunk(job: ChunkJob):
     aec_scores = []
     archived_speakers = []
     with model_lock:
+        local_model = ensure_local_model(model_name) if provider == "local" else None
         for speaker, path in speaker_paths:
             microphone = decode_audio_file(path)
             cleaned = microphone
@@ -243,19 +369,26 @@ def transcribe_chunk(job: ChunkJob):
                         aec_applied = False
             aec_scores.append(aec_confidence)
             if cleaned.size and rms(cleaned) > 0.0005:
-                segments, info = transcribe_speaker(cleaned, job.language)
+                if provider == "local":
+                    segments = transcribe_local(cleaned, job.language, local_model)
+                else:
+                    cloud_offset_samples = round(job.keepFromMs / 1000 * SAMPLE_RATE)
+                    cloud_audio = cleaned[cloud_offset_samples:]
+                    segments = transcribe_cloud(cloud_audio, job.language, provider, model_name, api_key) if cloud_audio.size else []
+                    for segment in segments:
+                        segment["startMs"] += job.keepFromMs
+                        segment["endMs"] += job.keepFromMs
                 for segment in segments:
-                    text = segment.text.strip()
-                    if not text or round(segment.start * 1000) < job.keepFromMs:
+                    segment = dict(segment)
+                    if segment["startMs"] < job.keepFromMs and segment.pop("coarse", False):
+                        segment["startMs"] = min(job.keepFromMs, segment["endMs"])
+                    if not segment["text"] or segment["startMs"] < job.keepFromMs or segment["endMs"] <= segment["startMs"]:
                         continue
+                    segment.pop("coarse", None)
                     response_segments.append({
                         "speakerId": speaker.id,
                         "speakerName": speaker.name,
-                        "startMs": round(segment.start * 1000),
-                        "endMs": round(segment.end * 1000),
-                        "text": text,
-                        "language": info.language,
-                        "confidence": max(0.0, min(1.0, math.exp(segment.avg_logprob))),
+                        **segment,
                         "aecApplied": aec_applied,
                         "aecConfidence": aec_confidence,
                     })
@@ -274,4 +407,6 @@ def transcribe_chunk(job: ChunkJob):
         "segments": response_segments,
         "aecConfidence": max(aec_scores, default=0.0),
         "speakerCount": len(job.speakers),
+        "provider": provider,
+        "model": model_name,
     }

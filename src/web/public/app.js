@@ -1502,6 +1502,115 @@ document.getElementById("downloadsRefresh").addEventListener("click", () => {
 
 let activeTranscriptionId = null;
 let transcriptionPollTimer = null;
+let transcriptionSettings = null;
+
+function fillTranscriptionProviders(select, selected) {
+  select.innerHTML = "";
+  for (const provider of transcriptionSettings?.catalog || []) {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = provider.label;
+    select.appendChild(option);
+  }
+  if ([...select.options].some((option) => option.value === selected)) select.value = selected;
+}
+
+function fillTranscriptionModels(providerId, select, selected) {
+  const provider = transcriptionSettings?.catalog?.find((candidate) => candidate.id === providerId);
+  select.innerHTML = "";
+  for (const model of provider?.models || []) {
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = model.note ? `${model.label} — ${model.note}` : model.label;
+    select.appendChild(option);
+  }
+  if ([...select.options].some((option) => option.value === selected)) select.value = selected;
+}
+
+function renderTranscriptionKeyStatus(keys = {}) {
+  const box = document.getElementById("transcriptionKeyStatus");
+  box.innerHTML = "";
+  for (const [name, label] of [["openai", "OpenAI"], ["mistral", "Mistral"]]) {
+    const status = keys[name] || {};
+    const card = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = label;
+    const value = document.createElement("span");
+    value.textContent = status.configured
+      ? `${status.masked || "настроен"} · ${status.source === "environment" ? ".env" : "панель"}`
+      : "ключ не настроен";
+    card.append(title, value);
+    box.appendChild(card);
+  }
+}
+
+function applyTranscriptionSettings(data, { preserveSessionSelection = false } = {}) {
+  transcriptionSettings = data;
+  const defaultProvider = document.getElementById("transcriptionDefaultProvider");
+  const defaultModel = document.getElementById("transcriptionDefaultModel");
+  fillTranscriptionProviders(defaultProvider, data.provider);
+  fillTranscriptionModels(defaultProvider.value, defaultModel, data.model);
+
+  const sessionProvider = document.getElementById("transcriptionProvider");
+  const sessionModel = document.getElementById("transcriptionModel");
+  const previousProvider = preserveSessionSelection ? sessionProvider.value : data.provider;
+  const previousModel = preserveSessionSelection ? sessionModel.value : data.model;
+  fillTranscriptionProviders(sessionProvider, previousProvider || data.provider);
+  fillTranscriptionModels(sessionProvider.value, sessionModel, previousModel || data.model);
+  renderTranscriptionKeyStatus(data.keys);
+  const worker = data.worker || {};
+  document.getElementById("transcriptionSettingsStatus").textContent = worker.ready
+    ? `Worker готов · ${worker.device || "cloud"} · загружена ${worker.loadedModel || "модель ещё не выбрана"}`
+    : `Worker недоступен${worker.error ? `: ${worker.error}` : ""}`;
+}
+
+async function loadTranscriptionSettings() {
+  const data = await api("/api/transcription-settings");
+  applyTranscriptionSettings(data);
+}
+
+document.getElementById("transcriptionProvider").addEventListener("change", (event) => {
+  fillTranscriptionModels(event.target.value, document.getElementById("transcriptionModel"));
+});
+document.getElementById("transcriptionDefaultProvider").addEventListener("change", (event) => {
+  fillTranscriptionModels(event.target.value, document.getElementById("transcriptionDefaultModel"));
+});
+
+document.getElementById("transcriptionSettingsForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = document.getElementById("transcriptionSettingsStatus");
+  const submit = document.getElementById("transcriptionSettingsSave");
+  submit.disabled = true;
+  status.textContent = "Сохраняю ключи и подготавливаю модель; первая загрузка может занять несколько минут…";
+  try {
+    const data = await api("/api/transcription-settings", {
+      method: "PUT",
+      timeoutMs: 30 * 60_000,
+      body: JSON.stringify({
+        provider: document.getElementById("transcriptionDefaultProvider").value,
+        model: document.getElementById("transcriptionDefaultModel").value,
+        keys: {
+          openai: document.getElementById("transcriptionOpenAiKey").value,
+          mistral: document.getElementById("transcriptionMistralKey").value,
+        },
+        clear: [
+          document.getElementById("transcriptionClearOpenAi").checked ? "openai" : null,
+          document.getElementById("transcriptionClearMistral").checked ? "mistral" : null,
+        ].filter(Boolean),
+      }),
+    });
+    document.getElementById("transcriptionOpenAiKey").value = "";
+    document.getElementById("transcriptionMistralKey").value = "";
+    document.getElementById("transcriptionClearOpenAi").checked = false;
+    document.getElementById("transcriptionClearMistral").checked = false;
+    applyTranscriptionSettings(data);
+    status.textContent = `Готово: ${data.provider}/${data.model}.`;
+  } catch (error) {
+    status.textContent = "Ошибка: " + error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 function transcriptClock(milliseconds) {
   const total = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
@@ -1562,14 +1671,14 @@ async function loadTranscriptions() {
   document.getElementById("transcriptionStart").disabled = Boolean(active);
   document.getElementById("transcriptionStop").disabled = !active || active.status === "finalizing";
   document.getElementById("transcriptionStatus").textContent = active
-    ? `🔴 ${active.status} · чанков ${active.chunks?.length || 0} · очередь worker ${data.workerQueue}`
+    ? `🔴 ${active.status} · ${active.provider}/${active.model} · чанков ${active.chunks?.length || 0} · очередь worker ${data.workerQueue}`
     : "Запись не активна.";
   renderTranscript(active?.segments || []);
   const tbody = document.getElementById("transcriptionSessions");
   tbody.innerHTML = "";
   for (const session of data.sessions || []) {
     const row = document.createElement("tr");
-    for (const value of [fmtTime(session.startedAt), session.status, session.language]) {
+    for (const value of [fmtTime(session.startedAt), session.status, session.language, `${session.provider}/${session.model}`]) {
       const cell = document.createElement("td");
       cell.textContent = value;
       row.appendChild(cell);
@@ -1616,7 +1725,7 @@ async function loadTranscriptions() {
 document.getElementById("transcriptionForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const status = document.getElementById("transcriptionStatus");
-  status.textContent = "Подключаю локальную модель…";
+  status.textContent = "Подготавливаю выбранную модель…";
   try {
     await api("/api/transcriptions", {
       method: "POST",
@@ -1625,6 +1734,8 @@ document.getElementById("transcriptionForm").addEventListener("submit", async (e
         voiceChannelId: document.getElementById("transcriptionVoice").value,
         announceChannelId: document.getElementById("transcriptionText").value,
         language: document.getElementById("transcriptionLanguage").value,
+        provider: document.getElementById("transcriptionProvider").value,
+        model: document.getElementById("transcriptionModel").value,
       }),
     });
     await loadTranscriptions();
@@ -1656,7 +1767,7 @@ document.getElementById("transcriptionRefresh").addEventListener("click", () => 
     await loadAccessIdentity();
     await loadStatus();
     await settleTasks(
-      [loadConfigEditor(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadDownloads(), loadTranscriptionChannels(), loadTranscriptions()],
+      [loadConfigEditor(), loadMusic(), loadMusicHistory(), loadPlaylists(), loadMusicChannels(), loadVoiceChannels(), loadModeration(), loadMembers(), loadStats(), loadHistoryChannels(), loadDownloads(), loadTranscriptionSettings(), loadTranscriptionChannels(), loadTranscriptions()],
       "boot",
     );
     await loadVoiceMembers();

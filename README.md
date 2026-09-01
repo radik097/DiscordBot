@@ -119,6 +119,25 @@ docker compose exec discord-bot bun run src/deploy-commands.js
 нужно запускать отдельно и указывать в `.env` через `COBALT_API_URL` и
 `TRANSCRIPTION_WORKER_URL`.
 
+### Модели транскрипции
+
+В блоке «Модели и ключи» можно выбрать локальную модель `tiny`, `base`,
+`small`, `medium`, `large-v3` или `distil-large-v3`. При сохранении worker сам
+скачивает выбранную модель в Docker volume `whisper-models`; повторная загрузка
+после перезапуска не требуется.
+
+Там же доступны облачные OpenAI (`gpt-4o-mini-transcribe`,
+`gpt-4o-transcribe`, `whisper-1`) и Mistral (`voxtral-mini-latest`). Ключ можно
+передать через `OPENAI_API_KEY`/`MISTRAL_API_KEY` в `.env` либо сохранить в
+панели. Панель хранит ключи зашифрованными в `data/`, показывает только маску и
+никогда не возвращает исходное значение браузеру. Для переносимого шифрования
+задайте собственный `TRANSCRIPTION_SETTINGS_SECRET`; иначе автоматически
+создаётся локальный `data/.transcription-settings.key`.
+
+Даже при облачной модели Discord-аудио сначала проходит локальный VAD/AEC:
+музыка бота удаляется до отправки очищенного чанка провайдеру. Использование
+облачного API может тарифицироваться провайдером.
+
 ---
 
 ## 🔧 Конфигурация
@@ -140,6 +159,9 @@ NGROK_DOMAIN=                     # опциональный закреплён�
 PUBLIC_BASE_URL=                  # server: https://panel.example.com
 CLOUDFLARE_TUNNEL_TOKEN=          # server: токен Cloudflare Tunnel
 YTDLP_POT_PROVIDER_URL=http://bgutil-provider:4416   # опционально
+OPENAI_API_KEY=                    # опционально; можно сохранить в панели
+MISTRAL_API_KEY=                   # опционально; можно сохранить в панели
+TRANSCRIPTION_SETTINGS_SECRET=     # рекомендуется для переносимого шифрования ключей
 ```
 
 ### Режимы Docker

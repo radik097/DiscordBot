@@ -119,6 +119,29 @@
   let phoneDevices = [];
   let demoTranscription = null;
   let demoTranscriptionSessions = [];
+  const transcriptionCatalog = [
+    { id: "local", label: "Локальный faster-whisper", cloud: false, models: [
+      { id: "tiny", label: "Whisper Tiny", note: "самая быстрая" },
+      { id: "base", label: "Whisper Base", note: "быстрая" },
+      { id: "small", label: "Whisper Small", note: "рекомендуется" },
+      { id: "medium", label: "Whisper Medium", note: "точнее" },
+      { id: "large-v3", label: "Whisper Large v3", note: "максимальная точность" },
+      { id: "distil-large-v3", label: "Distil Large v3", note: "быстрее Large v3" },
+    ] },
+    { id: "openai", label: "OpenAI", cloud: true, models: [
+      { id: "gpt-4o-mini-transcribe", label: "GPT-4o mini Transcribe", note: "рекомендуется" },
+      { id: "gpt-4o-transcribe", label: "GPT-4o Transcribe", note: "повышенная точность" },
+      { id: "whisper-1", label: "Whisper API", note: "совместимая модель" },
+    ] },
+    { id: "mistral", label: "Mistral", cloud: true, models: [
+      { id: "voxtral-mini-latest", label: "Voxtral Mini Transcribe", note: "актуальная batch-модель" },
+    ] },
+  ];
+  let demoTranscriptionSettings = {
+    provider: "local", model: "small", catalog: transcriptionCatalog,
+    keys: { openai: { configured: false, source: null, masked: null }, mistral: { configured: false, source: null, masked: null } },
+    worker: { ready: true, device: "cuda", loadedModel: "small" },
+  };
 
   function elapsed() {
     if (!current) return 0;
@@ -303,10 +326,24 @@
       available: [{ id: "demo-download", filename: "demo-video.mp4", size: 31457280, expiresAt: now() + 1800000, url: "#demo-download" }],
     });
 
+    if (path === "/api/transcription-settings" && method === "GET") return json(copy(demoTranscriptionSettings));
+    if (path === "/api/transcription-settings" && method === "PUT") {
+      demoTranscriptionSettings.provider = body.provider || demoTranscriptionSettings.provider;
+      demoTranscriptionSettings.model = body.model || demoTranscriptionSettings.model;
+      for (const provider of ["openai", "mistral"]) {
+        if (body.keys?.[provider]) demoTranscriptionSettings.keys[provider] = { configured: true, source: "panel", masked: "••••demo" };
+        if (body.clear?.includes(provider)) demoTranscriptionSettings.keys[provider] = { configured: false, source: null, masked: null };
+      }
+      demoTranscriptionSettings.worker.loadedModel = demoTranscriptionSettings.provider === "local" ? demoTranscriptionSettings.model : "small";
+      return json(copy(demoTranscriptionSettings));
+    }
+
     if (path === "/api/transcriptions" && method === "POST") {
       const id = `00000000-0000-4000-8000-${String(now()).slice(-12)}`;
       demoTranscription = {
         id, guildId: DEMO_GUILD_ID, status: "recording", language: body.language || "auto",
+        provider: body.provider || demoTranscriptionSettings.provider,
+        model: body.model || demoTranscriptionSettings.model,
         startedAt: now(), chunks: [], segments: [],
       };
       demoTranscriptionSessions.unshift(copy(demoTranscription));

@@ -22,5 +22,10 @@ describe("/transcribe", () => {
     expect(json.options.map((option) => option.name)).toEqual(["start", "status", "stop", "export", "delete"]);
     const exportCommand = json.options.find((option) => option.name === "export");
     expect(exportCommand.options.find((option) => option.name === "format").choices.map((choice) => choice.value)).toEqual(["txt", "srt"]);
+    const startCommand = json.options.find((option) => option.name === "start");
+    const modelValues = startCommand.options.find((option) => option.name === "model").choices.map((choice) => choice.value);
+    expect(modelValues).toContain("local:small");
+    expect(modelValues).toContain("openai:gpt-4o-mini-transcribe");
+    expect(modelValues).toContain("mistral:voxtral-mini-latest");
   });
 });
