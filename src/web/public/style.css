@@ -132,8 +132,48 @@ h3 { font-weight: 600; }
 .panel.dragging { opacity: 0.55; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5); }
 .panel.hidden-panel { display: none; }
 .panel.pinned { border-color: var(--md-primary); box-shadow: var(--shadow-panel), 0 0 0 1px rgba(185, 195, 255, 0.25) inset; }
+.panel.user-sized { overflow: auto; }
+
+#panelResizeModeBtn[aria-pressed="true"] {
+  color: var(--md-on-primary-container);
+  background: var(--md-primary-container);
+  box-shadow: 0 0 0 1px rgba(185, 195, 255, 0.28) inset;
+}
+
+.panel-resize-handle {
+  display: none;
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 3;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--md-primary);
+  background: rgba(35, 36, 48, 0.92);
+  border: 1px solid var(--md-outline-strong);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+body.resize-mode .panel {
+  min-width: 300px;
+  min-height: 160px;
+  border-color: rgba(185, 195, 255, 0.68);
+  box-shadow: var(--shadow-panel), 0 0 0 2px rgba(185, 195, 255, 0.12) inset;
+}
+body.resize-mode .panel:not(.collapsed) .panel-resize-handle { display: flex; }
+body.resize-mode .panel-header,
+body.resize-mode .panel-body { pointer-events: none; user-select: none; }
+body.resize-mode .panel-resize-handle:hover,
+body.resize-mode .panel-resize-handle:focus-visible { background: var(--md-primary-container); }
+body.resize-mode .panel.resizing { transition: none; }
 
 body.dragging-active { cursor: grabbing; user-select: none; }
+body.resizing-active { cursor: nwse-resize; user-select: none; }
 
 .panel-header {
   display: flex;
@@ -442,13 +482,16 @@ button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
   .statusbar select { grid-column: 1; grid-row: 1; min-width: 0; width: 100%; }
   .statusbar button { min-height: 38px; padding: 7px 10px; }
   .phone-connect { grid-column: 2; grid-row: 1; white-space: nowrap; }
+  #panelResizeModeBtn { display: none; }
   .panel-menu { display: none; }
   main#board { position: static; height: auto !important; margin: 10px; display: block; }
   .panel {
     position: relative !important;
     inset: auto !important;
-    width: 100%;
+    width: 100% !important;
+    height: auto !important;
     max-width: none;
+    overflow: hidden;
     border-radius: 18px;
   }
   .mobile-mode .panel { display: none !important; }

@@ -6,10 +6,16 @@
   const SNAP = 14; // px threshold for magnetism
   const GAP = 20;
   const PANEL_W = 420;
+  const MIN_PANEL_W = 300;
+  const MIN_PANEL_H = 160;
 
   const board = document.getElementById("board");
+  const resizeModeBtn = document.getElementById("panelResizeModeBtn");
+  const mobileMedia = window.matchMedia("(max-width: 720px)");
   const panelsList = () => [...board.querySelectorAll(".panel")];
   const allIds = panelsList().map((p) => p.dataset.panel);
+  let resizeMode = false;
+  let resizeSession = null;
 
   function loadRaw() {
     try {
@@ -27,6 +33,7 @@
       pinned: raw.pinned ?? [],
       collapsed: raw.collapsed ?? [],
       hidden: raw.hidden ?? [],
+      sizes: raw.sizes ?? {},
     };
   }
 
@@ -74,12 +81,17 @@
 
       const pinned = state.pinned.includes(id);
       const hidden = state.hidden.includes(id);
+      const collapsed = state.collapsed.includes(id);
+      const size = state.sizes[id];
+      p.style.width = size ? `${Math.max(MIN_PANEL_W, Number(size.width) || PANEL_W)}px` : "";
+      p.style.height = size && !collapsed ? `${Math.max(MIN_PANEL_H, Number(size.height) || MIN_PANEL_H)}px` : "";
+      p.classList.toggle("user-sized", Boolean(size));
       p.classList.toggle("pinned", pinned);
-      p.classList.toggle("collapsed", state.collapsed.includes(id));
+      p.classList.toggle("collapsed", collapsed);
       p.classList.toggle("hidden-panel", hidden);
       p.querySelector(".pin-btn")?.classList.toggle("active", pinned);
       const collapseBtn = p.querySelector(".collapse-btn");
-      if (collapseBtn) collapseBtn.textContent = state.collapsed.includes(id) ? "▸" : "▾";
+      if (collapseBtn) collapseBtn.textContent = collapsed ? "▸" : "▾";
 
       if (!hidden) maxBottom = Math.max(maxBottom, pos.y + p.offsetHeight);
     }
@@ -112,6 +124,83 @@
       s.zOrder = [...s.zOrder.filter((x) => x !== id), id];
     });
   }
+
+  function setResizeMode(enabled) {
+    resizeMode = Boolean(enabled) && !mobileMedia.matches;
+    document.body.classList.toggle("resize-mode", resizeMode);
+    resizeModeBtn.setAttribute("aria-pressed", String(resizeMode));
+    resizeModeBtn.textContent = resizeMode ? "✓ Размеры" : "↘ Размеры";
+    resizeModeBtn.title = resizeMode
+      ? "Выключить режим изменения размеров блоков"
+      : "Включить режим изменения размеров блоков";
+    for (const panel of panelsList()) {
+      panel.querySelector(".panel-header").inert = resizeMode;
+      panel.querySelector(".panel-body").inert = resizeMode;
+    }
+  }
+
+  function updateBoardHeight() {
+    let maxBottom = 0;
+    for (const panel of panelsList()) {
+      if (panel.classList.contains("hidden-panel")) continue;
+      maxBottom = Math.max(maxBottom, (parseFloat(panel.style.top) || 0) + panel.offsetHeight);
+    }
+    board.style.height = `${maxBottom + GAP}px`;
+  }
+
+  function finishResize(event) {
+    if (!resizeSession || (event?.pointerId != null && event.pointerId !== resizeSession.pointerId)) return;
+    const { panel } = resizeSession;
+    resizeSession = null;
+    panel.classList.remove("resizing");
+    document.body.classList.remove("resizing-active");
+    updateState((state) => {
+      state.sizes[panel.dataset.panel] = {
+        width: Math.round(panel.offsetWidth),
+        height: Math.round(panel.offsetHeight),
+      };
+    });
+  }
+
+  for (const panel of panelsList()) {
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "panel-resize-handle";
+    handle.textContent = "↘";
+    handle.setAttribute("aria-label", `Изменить размер блока «${panel.dataset.title}»`);
+    panel.appendChild(handle);
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (!resizeMode || panel.classList.contains("collapsed")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      bringToFront(panel.dataset.panel);
+      resizeSession = {
+        panel,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: panel.offsetWidth,
+        startHeight: panel.offsetHeight,
+      };
+      panel.classList.add("resizing");
+      document.body.classList.add("resizing-active");
+      handle.setPointerCapture?.(event.pointerId);
+    });
+  }
+
+  document.addEventListener("pointermove", (event) => {
+    if (!resizeSession || event.pointerId !== resizeSession.pointerId) return;
+    const { panel, startX, startY, startWidth, startHeight } = resizeSession;
+    const left = parseFloat(panel.style.left) || 0;
+    const maxWidth = Math.max(MIN_PANEL_W, board.clientWidth - left);
+    panel.style.width = `${Math.min(maxWidth, Math.max(MIN_PANEL_W, startWidth + event.clientX - startX))}px`;
+    panel.style.height = `${Math.max(MIN_PANEL_H, startHeight + event.clientY - startY)}px`;
+    panel.classList.add("user-sized");
+    updateBoardHeight();
+  });
+  document.addEventListener("pointerup", finishResize);
+  document.addEventListener("pointercancel", finishResize);
 
   // --- Free-drag with magnetism against the board edges and other panels ---
   function computeSnap(id, x, y, w, h) {
@@ -176,7 +265,7 @@
 
   for (const p of panelsList()) {
     p.querySelector(".drag-handle").addEventListener("mousedown", (e) => {
-      if (p.classList.contains("pinned")) return;
+      if (resizeMode || p.classList.contains("pinned")) return;
       e.preventDefault();
       dragEl = p;
       dragStartMouse = { x: e.clientX, y: e.clientY };
@@ -219,7 +308,11 @@
     if (!menuList.contains(e.target) && e.target !== menuBtn) menuList.classList.remove("open");
   });
 
+  resizeModeBtn.addEventListener("click", () => setResizeMode(!resizeMode));
+  mobileMedia.addEventListener("change", () => setResizeMode(false));
+
   window.addEventListener("resize", () => applyState());
 
   applyState();
+  setResizeMode(false);
 })();
