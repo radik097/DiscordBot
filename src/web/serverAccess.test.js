@@ -330,4 +330,46 @@ describe("web email access integration", () => {
     expect(scriptText).toContain('input.type = show ? "text" : "password"');
     expect(scriptText).toContain("new PasswordCredential");
   });
+
+  test("serves a Cloudflare-compatible CSP without weakening inline script protection", async () => {
+    const first = await fetch(`${base}/login`, {
+      headers: {
+        host: "discord.example.com",
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-host": "discord.example.com",
+        "x-forwarded-proto": "https",
+      },
+    });
+    const second = await fetch(`${base}/login`, {
+      headers: {
+        host: "discord.example.com",
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-host": "discord.example.com",
+        "x-forwarded-proto": "https",
+      },
+    });
+    const firstCsp = first.headers.get("content-security-policy") ?? "";
+    const secondCsp = second.headers.get("content-security-policy") ?? "";
+    const scriptDirective = firstCsp.split(";").find((part) => part.trim().startsWith("script-src")) ?? "";
+
+    expect(scriptDirective).toContain("'self'");
+    expect(scriptDirective).toMatch(/'nonce-[A-Za-z0-9+/=]+'/);
+    expect(scriptDirective).toContain("https://static.cloudflareinsights.com");
+    expect(scriptDirective).not.toContain("'unsafe-inline'");
+    expect(firstCsp).toContain("connect-src 'self' https://cloudflareinsights.com");
+    expect(secondCsp).not.toBe(firstCsp);
+  });
+
+  test("returns an empty favicon response instead of a server error", async () => {
+    const response = await fetch(`${base}/favicon.ico`);
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  test("serves one CSP policy on the authenticated panel root", async () => {
+    const response = await fetch(`${base}/`, { redirect: "manual" });
+    const csp = response.headers.get("content-security-policy") ?? "";
+    expect(response.status).toBe(200);
+    expect(csp.match(/default-src/g)?.length).toBe(1);
+  });
 });

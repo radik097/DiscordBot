@@ -178,9 +178,10 @@ function notAllowed(message) {
 }
 
 function buildSecurityHeaders(headers = {}) {
+  const nonce = randomBytes(16).toString("base64");
   return {
     "cache-control": "no-store",
-    "content-security-policy": "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none';",
+    "content-security-policy": `default-src 'self'; img-src 'self' data:; script-src 'self' 'nonce-${nonce}' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://cloudflareinsights.com; base-uri 'none'; frame-ancestors 'none';`,
     "referrer-policy": "no-referrer",
     ...headers,
   };
@@ -1245,13 +1246,17 @@ export function startWebServer(client, port = 8787, {
           return notFound();
         }
 
+        if (url.pathname === "/favicon.ico" && (req.method === "GET" || req.method === "HEAD")) {
+          return new Response(null, { status: 204, headers: buildSecurityHeaders() });
+        }
+
         const staticResponse = await serveStatic(url.pathname);
         if (url.pathname === "/" || url.pathname === "/index.html") {
           if (!context && !local && !remoteAuth) return new Response(null, { status: 303, headers: { location: "/login", ...buildSecurityHeaders() } });
           if (context || local || remoteAuth) {
             if (context?.accessSession) {
               const merged = new Headers(staticResponse.headers);
-              for (const [k, v] of headers.entries()) merged.append(k, v);
+              for (const [k, v] of headers.entries()) merged.set(k, v);
               merged.set("x-csrf-token", context.csrf);
               return new Response(staticResponse.body, { status: staticResponse.status, headers: merged });
             }
@@ -1259,7 +1264,7 @@ export function startWebServer(client, port = 8787, {
             const session = panelSessions.get(sessionId);
             if (session) {
               const merged = new Headers(staticResponse.headers);
-              for (const [k, v] of headers.entries()) merged.append(k, v);
+              for (const [k, v] of headers.entries()) merged.set(k, v);
               merged.set("x-csrf-token", session.csrf);
               return new Response(staticResponse.body, { status: staticResponse.status, headers: merged });
             }
