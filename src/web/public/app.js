@@ -1580,9 +1580,23 @@ async function loadTranscriptions() {
       link.href = `/api/transcriptions/${encodeURIComponent(session.id)}/export?format=${format}`;
       link.textContent = format.toUpperCase();
       link.className = "button-link";
+      link.download = "";
       exportsCell.append(link, document.createTextNode(" "));
     }
     const actionCell = document.createElement("td");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "Открыть";
+    open.addEventListener("click", async () => {
+      const status = document.getElementById("transcriptionStatus");
+      try {
+        const details = await api(`/api/transcriptions/${encodeURIComponent(session.id)}`);
+        renderTranscript(details.segments || []);
+        status.textContent = `Просмотр сессии ${session.id} · сегментов ${details.segments?.length || 0}`;
+      } catch (error) {
+        status.textContent = "Ошибка просмотра: " + error.message;
+      }
+    });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "Удалить";
@@ -1592,7 +1606,7 @@ async function loadTranscriptions() {
       await api(`/api/transcriptions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
       await loadTranscriptions();
     });
-    actionCell.appendChild(remove);
+    actionCell.append(open, document.createTextNode(" "), remove);
     row.append(exportsCell, actionCell);
     tbody.appendChild(row);
   }
