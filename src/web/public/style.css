@@ -643,6 +643,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
 .transcription-settings-form .secret-clear input { width: auto; }
 .transcription-settings-form button { grid-column: 1 / -1; min-height: 40px; }
 .transcription-live { display: grid; gap: 7px; max-height: 300px; overflow-y: auto; margin: 12px 0; padding: 10px; border: 1px solid var(--md-outline); border-radius: var(--r-sm); background: rgba(0, 0, 0, 0.14); }
+.transcription-live-delta { border-left: 3px solid var(--md-primary); padding-left: 7px; }
 .transcript-line { display: grid; grid-template-columns: 82px minmax(90px, auto) 1fr; gap: 8px; align-items: start; }
 .transcript-time { color: var(--md-on-surface-muted); font-variant-numeric: tabular-nums; font-size: 11px; }
 .transcript-speaker { color: var(--md-primary); font-weight: 600; }

@@ -5,7 +5,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { OpusEncoder } from "@discordjs/opus";
-import { TimedPcmFile, TranscriptionService } from "./service.js";
+import { speakerRecordingFilename, TimedPcmFile, TranscriptionService } from "./service.js";
 
 async function eventually(check, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -47,6 +47,18 @@ function fixture() {
 }
 
 describe("transcription service", () => {
+  test("builds speaker filenames with local date, identity and session time range", () => {
+    const startedAt = Date.UTC(2026, 8, 4, 13, 45, 41);
+    const sessionStartedAt = startedAt - 3_178_000;
+    expect(speakerRecordingFilename({
+      speaker: { name: "Rodion", id: "718739323813625896" },
+      sessionStartedAt,
+      startedAt,
+      endedAt: sessionStartedAt + 3_239_000,
+      timeZone: "Australia/Sydney",
+    })).toBe("2026-09-04_23-45-41__Rodion__718739323813625896__00h52m58s-00h53m59s.flac");
+  });
+
   test("writes sparse PCM on a wall-clock timeline", async () => {
     const root = await mkdtemp(join(tmpdir(), "timed-pcm-"));
     const path = join(root, "track.s16le");
@@ -107,10 +119,76 @@ describe("transcription service", () => {
       expect(preparedProfiles[0].apiKey).toBe("in-memory-cloud-key");
       expect(submittedProfiles[0].apiKey).toBe("in-memory-cloud-key");
       expect(JSON.stringify(submittedJobs[0])).not.toContain("in-memory-cloud-key");
+      expect(submittedJobs[0].speakers[0].file).toMatch(
+        /\/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}__Алиса__123__00h00m00s-00h00m00s\.s16le$/,
+      );
       expect(messages[0]).toMatchObject({ allowedMentions: { parse: [] } });
       expect(messages[0].content).toContain("**Алиса:** Привет");
       expect(queue.acquired).toEqual([`transcription:${session.id}`]);
       expect(queue.released).toEqual([`transcription:${session.id}`]);
+    } finally {
+      if (session) service.delete(session.id);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("streams Mistral realtime deltas per Discord speaker and keeps batch finalization", async () => {
+    const root = await mkdtemp(join(tmpdir(), "transcription-realtime-"));
+    const { speaking, streams, queue, guild, voiceChannel } = fixture();
+    const realtimeAudio = [];
+    let realtimeHandler;
+    let realtimeClosed = false;
+    const worker = {
+      health: async () => ({ ready: true }),
+      prepare: async (profile) => profile,
+      openRealtime: (_profile, { onEvent }) => {
+        realtimeHandler = onEvent;
+        return {
+          ready: Promise.resolve(),
+          send: (pcm) => { realtimeAudio.push(Buffer.from(pcm)); return true; },
+          close: async () => { realtimeClosed = true; },
+        };
+      },
+      transcribe: async (job) => ({
+        aecConfidence: 0.8,
+        segments: [{
+          speakerId: job.speakers[0].id, speakerName: job.speakers[0].name,
+          startMs: 0, endMs: 100, text: "Финальный текст", language: "ru", aecApplied: true,
+        }],
+      }),
+    };
+    const settings = {
+      resolve: (provider = "mistral", model = "voxtral-mini-transcribe-realtime-2602") => ({
+        provider, model, cloud: true, apiKey: "in-memory-realtime-key",
+      }),
+    };
+    const service = new TranscriptionService({ root, worker, settings, queueProvider: () => queue, chunkMs: 60_000 });
+    let session;
+    try {
+      session = await service.start({
+        guild, voiceChannel, language: "ru",
+        provider: "mistral", model: "voxtral-mini-transcribe-realtime-2602",
+        startedById: "operator", startedByTag: "Operator",
+      });
+      speaking.emit("start", "123");
+      const encoder = new OpusEncoder(48_000, 2);
+      const pcm = Buffer.alloc(3_840);
+      pcm.writeInt16LE(2_000, 0);
+      streams.get("123").write(encoder.encode(pcm, 960));
+      await eventually(() => realtimeAudio.length > 0);
+      realtimeHandler({ type: "delta", text: "Живой " });
+      realtimeHandler({ type: "delta", text: "текст" });
+      expect(service.details(session.id).liveSegments[0]).toMatchObject({
+        speakerId: "123", speakerName: "Алиса", text: "Живой текст", live: true,
+      });
+      await service.stop(guild.id);
+      const completed = await eventually(() => {
+        const details = service.details(session.id);
+        return details?.status === "completed" ? details : null;
+      });
+      expect(realtimeClosed).toBeTrue();
+      expect(completed.segments[0].text).toBe("Финальный текст");
+      expect(completed.realtime.enabled).toBeTrue();
     } finally {
       if (session) service.delete(session.id);
       await rm(root, { recursive: true, force: true });

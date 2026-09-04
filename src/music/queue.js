@@ -7,8 +7,8 @@ import {
   entersState,
 } from "@discordjs/voice";
 import { randomUUID } from "node:crypto";
-import { Transform } from "node:stream";
 import { getAudioStream } from "./source.js";
+import { createRealtimePcmPacer } from "./pcmPacer.js";
 import { saveQueueState, loadQueueState } from "./persistence.js";
 import { recordCachedTrack } from "./history.js";
 import { publishMusicReference } from "../transcription/reference.js";
@@ -401,15 +401,11 @@ class GuildQueue {
       this.currentProcess = child;
       this.currentQuality = quality;
       console.log(`[music:${this.guildId}] Поток запущен для "${sanitizeFileName(next.title)}" с ${this.playbackOffsetSec.toFixed(1)}с, quality=${quality}, type=${type}`);
-      const queue = this;
-      const referenceTap = new Transform({
-        transform(chunk, _encoding, callback) {
-          publishMusicReference(queue.guildId, chunk, queue.volume, Date.now());
-          callback(null, chunk);
-        },
+      const pacedStream = createRealtimePcmPacer({
+        onFrame: (frame) => publishMusicReference(this.guildId, frame, this.volume, Date.now()),
       });
-      stream.pipe(referenceTap);
-      const resource = createAudioResource(referenceTap, {
+      stream.pipe(pacedStream);
+      const resource = createAudioResource(pacedStream, {
         inputType: type,
         inlineVolume: true,
         metadata: { queueId: next.queueId, generation },

@@ -27,5 +27,6 @@ describe("/transcribe", () => {
     expect(modelValues).toContain("local:small");
     expect(modelValues).toContain("openai:gpt-4o-mini-transcribe");
     expect(modelValues).toContain("mistral:voxtral-mini-latest");
+    expect(modelValues).toContain("mistral:voxtral-mini-transcribe-realtime-2602");
   });
 });

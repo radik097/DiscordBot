@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync,
-  rmSync, writeFileSync, writeSync,
+  renameSync, rmSync, writeFileSync, writeSync,
 } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { OpusEncoder } from "@discordjs/opus";
@@ -16,6 +16,7 @@ import {
 } from "../db.js";
 import { getQueue } from "../music/queue.js";
 import { exportTranscript, transcriptFilename } from "./export.js";
+import { isMistralRealtimeProfile, RealtimePcm16k } from "./realtimePcm.js";
 import { registerMusicReferenceSink, scalePcm16le } from "./reference.js";
 import { transcriptionSettings } from "./settings.js";
 import { transcriptionWorker } from "./workerClient.js";
@@ -28,6 +29,7 @@ const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_PENDING_CHUNKS = Math.max(1, Number(process.env.TRANSCRIPTION_MAX_PENDING_CHUNKS) || 10);
 const MAX_JOB_ATTEMPTS = Math.max(1, Number(process.env.TRANSCRIPTION_JOB_ATTEMPTS) || 3);
 const JOB_RETRY_DELAY_MS = Math.max(10, Number(process.env.TRANSCRIPTION_JOB_RETRY_DELAY_MS) || 1_000);
+const DEFAULT_FILENAME_TIME_ZONE = process.env.TRANSCRIPTION_FILENAME_TIME_ZONE || "Australia/Sydney";
 
 function boundedLanguage(value) {
   const language = String(value || "auto").toLowerCase();
@@ -40,6 +42,50 @@ function safeInside(root, path) {
   const absolute = resolve(path);
   if (absolute !== absoluteRoot && !absolute.startsWith(`${absoluteRoot}${sep}`)) throw new Error("Некорректный путь транскрипции.");
   return absolute;
+}
+
+function safeFilenamePart(value, fallback) {
+  const normalized = String(value || "")
+    .normalize("NFKC")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[._]+|[._]+$/g, "")
+    .slice(0, 80);
+  return normalized || fallback;
+}
+
+function calendarStamp(timestamp, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = Object.fromEntries(
+    formatter.formatToParts(new Date(timestamp))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}_${parts.hour}-${parts.minute}-${parts.second}`;
+}
+
+function elapsedStamp(durationMs) {
+  const totalSeconds = Math.max(0, Math.floor(Number(durationMs || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}h${String(minutes).padStart(2, "0")}m${String(seconds).padStart(2, "0")}s`;
+}
+
+export function speakerRecordingFilename({
+  speaker, sessionStartedAt, startedAt, endedAt,
+  timeZone = DEFAULT_FILENAME_TIME_ZONE, extension = "flac",
+}) {
+  const name = safeFilenamePart(speaker?.name, "speaker");
+  const id = safeFilenamePart(speaker?.id, "unknown");
+  const range = `${elapsedStamp(startedAt - sessionStartedAt)}-${elapsedStamp(endedAt - sessionStartedAt)}`;
+  return `${calendarStamp(startedAt, timeZone)}__${name}__${id}__${range}.${safeFilenamePart(extension, "flac")}`;
 }
 
 export class TimedPcmFile {
@@ -90,6 +136,7 @@ export class TranscriptionService {
     maxActive = Math.max(1, Number(process.env.TRANSCRIPTION_MAX_ACTIVE) || 1),
     maxJobAttempts = MAX_JOB_ATTEMPTS,
     jobRetryDelayMs = JOB_RETRY_DELAY_MS,
+    filenameTimeZone = DEFAULT_FILENAME_TIME_ZONE,
     now = () => Date.now(),
   } = {}) {
     this.root = resolve(root);
@@ -102,6 +149,7 @@ export class TranscriptionService {
     this.maxActive = maxActive;
     this.maxJobAttempts = Math.max(1, Number(maxJobAttempts) || 1);
     this.jobRetryDelayMs = Math.max(1, Number(jobRetryDelayMs) || 1);
+    this.filenameTimeZone = filenameTimeZone;
     this.now = now;
     this.active = new Map();
     this.jobs = [];
@@ -139,6 +187,8 @@ export class TranscriptionService {
       language: boundedLanguage(language), provider: profile.provider, model: profile.model,
       startedAt, chunkIndex: 0,
       speakers: new Map(), decoders: new Map(), subscriptions: new Map(),
+      realtimeProfile: isMistralRealtimeProfile(profile) ? profile : null,
+      realtimeStreams: new Map(), liveSegments: new Map(), realtimeErrors: [],
       pendingJobs: 0, stopped: false, timer: null, unregisterReference: null,
     };
     try {
@@ -214,6 +264,7 @@ export class TranscriptionService {
     if (!speaker) return;
     const decoder = new OpusEncoder(48_000, 2);
     const stream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
+    const realtime = state.realtimeProfile ? this.#openRealtimeSpeaker(state, userId, speaker) : null;
     state.decoders.set(userId, decoder);
     state.subscriptions.set(userId, stream);
     state.speakers.set(userId, speaker);
@@ -222,13 +273,18 @@ export class TranscriptionService {
       try {
         const capturedAt = this.now();
         const current = state.current;
+        const pcm = decoder.decode(packet);
         let track = current.tracks.get(userId);
         if (!track) {
           track = new TimedPcmFile(resolve(current.directory, `speaker-${userId}.s16le`), current.startedAt);
           current.tracks.set(userId, track);
           current.speakers.set(userId, speaker);
         }
-        track.write(decoder.decode(packet), capturedAt);
+        track.write(pcm, capturedAt);
+        if (realtime) {
+          const realtimePcm = realtime.converter.push(pcm);
+          if (realtimePcm.length) realtime.stream.send(realtimePcm);
+        }
       } catch (error) {
         console.warn(`[transcription:${state.id}] Не удалось декодировать ${userId}:`, error.message);
       }
@@ -236,12 +292,73 @@ export class TranscriptionService {
     const cleanup = () => {
       state.subscriptions.delete(userId);
       state.decoders.delete(userId);
+      const activeRealtime = state.realtimeStreams.get(userId);
+      if (activeRealtime) {
+        state.realtimeStreams.delete(userId);
+        void activeRealtime.stream.close();
+      }
     };
     stream.once("close", cleanup);
     stream.once("error", (error) => {
       console.warn(`[transcription:${state.id}] Поток ${userId}:`, error.message);
       cleanup();
     });
+  }
+
+  #openRealtimeSpeaker(state, userId, speaker) {
+    try {
+      const converter = new RealtimePcm16k();
+      const stream = this.worker.openRealtime(state.realtimeProfile, {
+        onEvent: (event) => this.#handleRealtimeEvent(state, userId, speaker, event),
+      });
+      const realtime = { stream, converter, speaker };
+      state.realtimeStreams.set(userId, realtime);
+      void stream.ready.catch((error) => this.#recordRealtimeError(state, userId, error.message));
+      return realtime;
+    } catch (error) {
+      this.#recordRealtimeError(state, userId, error.message);
+      return null;
+    }
+  }
+
+  #handleRealtimeEvent(state, userId, speaker, event) {
+    if (!event || state.stopped) return;
+    if (event.type === "error") {
+      this.#recordRealtimeError(state, userId, event.error || "Realtime worker error");
+      return;
+    }
+    if (event.type !== "delta" || !event.text) return;
+    const timestamp = Math.max(0, this.now() - state.startedAt);
+    const current = state.liveSegments.get(userId) || {
+      speakerId: speaker.id,
+      speakerName: speaker.name,
+      startMs: timestamp,
+      endMs: timestamp,
+      text: "",
+      language: state.language === "auto" ? null : state.language,
+      confidence: null,
+      live: true,
+    };
+    current.text += String(event.text);
+    current.endMs = timestamp;
+    state.liveSegments.set(userId, current);
+  }
+
+  #recordRealtimeError(state, userId, message) {
+    const error = String(message || "Realtime transcription error").slice(0, 300);
+    state.realtimeErrors.push({ speakerId: String(userId), error, at: this.now() });
+    if (state.realtimeErrors.length > 20) state.realtimeErrors.shift();
+    console.warn(`[transcription:${state.id}] Realtime ${userId}: ${error}`);
+  }
+
+  async #closeRealtimeStreams(state) {
+    const closing = [...state.realtimeStreams.values()].map(({ stream }) => stream.close());
+    state.realtimeStreams.clear();
+    if (!closing.length) return;
+    await Promise.race([
+      Promise.allSettled(closing),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
   }
 
   async #rotate(state, endedAt, final = false) {
@@ -254,10 +371,26 @@ export class TranscriptionService {
     current.reference?.close(durationMs);
     const relativeDirectory = relative(this.root, current.directory).replaceAll("\\", "/");
     const chunkId = randomUUID();
-    const speakers = [...current.speakers.values()].map((speaker) => ({
-      ...speaker,
-      file: `${relativeDirectory}/speaker-${speaker.id}.s16le`,
-    }));
+    const speakers = [];
+    for (const [userId, track] of current.tracks) {
+      const speaker = current.speakers.get(userId);
+      if (!speaker) continue;
+      const filename = speakerRecordingFilename({
+        speaker,
+        sessionStartedAt: state.startedAt,
+        startedAt: current.startedAt,
+        endedAt,
+        timeZone: this.filenameTimeZone,
+        extension: "s16le",
+      });
+      const archivedPath = safeInside(this.root, resolve(current.directory, filename));
+      if (track.path !== archivedPath) renameSync(track.path, archivedPath);
+      track.path = archivedPath;
+      speakers.push({
+        ...speaker,
+        file: relative(this.root, archivedPath).replaceAll("\\", "/"),
+      });
+    }
     const metadata = {
       sessionId: state.id, chunkId, chunkIndex: current.index,
       startMs: current.startedAt - state.startedAt,
@@ -285,6 +418,7 @@ export class TranscriptionService {
       void this.#pump();
     }
     if (!final && !state.stopped) {
+      state.liveSegments.clear();
       state.chunkIndex += 1;
       this.#openChunk(state, endedAt - this.overlapMs, endedAt + this.chunkMs, current);
       this.#scheduleRotation(state);
@@ -379,6 +513,7 @@ export class TranscriptionService {
     for (const stream of state.subscriptions.values()) stream.destroy();
     state.subscriptions.clear();
     state.decoders.clear();
+    await this.#closeRealtimeStreams(state);
     state.queue.releaseVoiceLease(`transcription:${state.id}`);
     this.active.delete(String(guildId));
     updateTranscriptionSession(state.id, {
@@ -402,6 +537,8 @@ export class TranscriptionService {
     for (const stream of state.subscriptions.values()) stream.destroy();
     state.subscriptions.clear();
     state.decoders.clear();
+    for (const { stream } of state.realtimeStreams.values()) void stream.close();
+    state.realtimeStreams.clear();
     state.queue.releaseVoiceLease(`transcription:${state.id}`);
     this.active.delete(String(state.guild.id));
     if (state.current) {
@@ -427,7 +564,18 @@ export class TranscriptionService {
   details(id) {
     const session = getTranscriptionSession(id);
     if (!session) return null;
-    return { ...session, chunks: listTranscriptionChunks(id), segments: listTranscriptionSegments(id) };
+    const active = [...this.active.values()].find((candidate) => candidate.id === String(id));
+    return {
+      ...session,
+      chunks: listTranscriptionChunks(id),
+      segments: listTranscriptionSegments(id),
+      liveSegments: active ? [...active.liveSegments.values()].map((segment) => ({ ...segment })) : [],
+      realtime: {
+        enabled: isMistralRealtimeProfile(session),
+        streams: active?.realtimeStreams.size || 0,
+        errors: active ? active.realtimeErrors.map((error) => ({ ...error })) : [],
+      },
+    };
   }
 
   export(id, format = "txt") {

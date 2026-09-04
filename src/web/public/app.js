@@ -1635,18 +1635,18 @@ function renderTranscript(segments = []) {
   const live = document.getElementById("transcriptionLive");
   live.innerHTML = "";
   if (!segments.length) {
-    live.innerHTML = '<span class="hint">Распознанный текст появится после первого минутного чанка.</span>';
+    live.innerHTML = '<span class="hint">Для Mistral Realtime текст появится во время разговора; остальные модели обновляются после чанка.</span>';
     return;
   }
   for (const segment of segments) {
     const line = document.createElement("div");
-    line.className = `transcript-line${segment.aecConfidence != null && segment.aecConfidence < 0.12 ? " transcription-aec-low" : ""}`;
+    line.className = `transcript-line${segment.live ? " transcription-live-delta" : ""}${segment.aecConfidence != null && segment.aecConfidence < 0.12 ? " transcription-aec-low" : ""}`;
     const time = document.createElement("span");
     time.className = "transcript-time";
     time.textContent = transcriptClock(segment.startMs);
     const speaker = document.createElement("span");
     speaker.className = "transcript-speaker";
-    speaker.textContent = segment.speakerName;
+    speaker.textContent = `${segment.speakerName}${segment.live ? " · live" : ""}`;
     const textNode = document.createElement("span");
     textNode.textContent = segment.text;
     line.append(time, speaker, textNode);
@@ -1655,12 +1655,12 @@ function renderTranscript(segments = []) {
   live.scrollTop = live.scrollHeight;
 }
 
-function scheduleTranscriptionRefresh() {
+function scheduleTranscriptionRefresh(delayMs = 5000) {
   if (transcriptionPollTimer) return;
   transcriptionPollTimer = setTimeout(() => {
     transcriptionPollTimer = null;
     void loadTranscriptions().catch((error) => console.warn("[transcription]", error));
-  }, 5000);
+  }, delayMs);
 }
 
 async function loadTranscriptions() {
@@ -1670,10 +1670,13 @@ async function loadTranscriptions() {
   activeTranscriptionId = active?.id || null;
   document.getElementById("transcriptionStart").disabled = Boolean(active);
   document.getElementById("transcriptionStop").disabled = !active || active.status === "finalizing";
+  const realtimeStatus = active?.realtime?.enabled
+    ? ` · realtime потоков ${active.realtime.streams || 0}${active.realtime.errors?.length ? ` · ошибок ${active.realtime.errors.length}` : ""}`
+    : "";
   document.getElementById("transcriptionStatus").textContent = active
-    ? `🔴 ${active.status} · ${active.provider}/${active.model} · чанков ${active.chunks?.length || 0} · очередь worker ${data.workerQueue}`
+    ? `🔴 ${active.status} · ${active.provider}/${active.model}${realtimeStatus} · чанков ${active.chunks?.length || 0} · очередь worker ${data.workerQueue}`
     : "Запись не активна.";
-  renderTranscript(active?.segments || []);
+  renderTranscript([...(active?.segments || []), ...(active?.liveSegments || [])]);
   const tbody = document.getElementById("transcriptionSessions");
   tbody.innerHTML = "";
   for (const session of data.sessions || []) {
@@ -1719,7 +1722,7 @@ async function loadTranscriptions() {
     row.append(exportsCell, actionCell);
     tbody.appendChild(row);
   }
-  if (active) scheduleTranscriptionRefresh();
+  if (active) scheduleTranscriptionRefresh(active.realtime?.enabled ? 1000 : 5000);
 }
 
 document.getElementById("transcriptionForm").addEventListener("submit", async (event) => {

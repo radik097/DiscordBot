@@ -27,6 +27,7 @@ const PROVIDERS = Object.freeze({
     label: "Mistral",
     cloud: true,
     models: Object.freeze([
+      { id: "voxtral-mini-transcribe-realtime-2602", label: "Voxtral Mini Realtime", note: "живые субтитры + batch-финализация" },
       { id: "voxtral-mini-latest", label: "Voxtral Mini Transcribe", note: "актуальная batch-модель" },
     ]),
   }),

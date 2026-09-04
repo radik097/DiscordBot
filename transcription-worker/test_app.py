@@ -48,6 +48,23 @@ class WorkerModelTests(unittest.TestCase):
             )
         self.assertNotIn("do-not-echo-this-key", str(raised.exception))
 
+    @patch.object(app.requests, "post")
+    def test_realtime_profile_uses_batch_model_for_authoritative_chunk_output(self, post):
+        response = Mock(ok=True)
+        response.json.return_value = {"text": "Финальный текст", "language": "ru"}
+        post.return_value = response
+        result = app.transcribe_cloud(
+            np.ones(1600, dtype=np.float32) * 0.01,
+            "ru", "mistral", "voxtral-mini-transcribe-realtime-2602", "secret-test-key",
+        )
+        self.assertEqual(post.call_args.kwargs["data"]["model"], "voxtral-mini-latest")
+        self.assertEqual(result[0]["text"], "Финальный текст")
+
+    def test_realtime_profile_is_accepted_only_for_mistral(self):
+        app.validate_profile("mistral", "voxtral-mini-transcribe-realtime-2602")
+        with self.assertRaises(Exception):
+            app.validate_profile("openai", "voxtral-mini-transcribe-realtime-2602")
+
 
 if __name__ == "__main__":
     unittest.main()

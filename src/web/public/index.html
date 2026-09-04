@@ -337,7 +337,7 @@
         <button id="transcriptionRefresh" type="button">Обновить</button>
         <span id="transcriptionStatus" class="hint">Запись не активна.</span>
       </div>
-      <div id="transcriptionLive" class="transcription-live"><span class="hint">Распознанный текст появится после первого минутного чанка.</span></div>
+      <div id="transcriptionLive" class="transcription-live"><span class="hint">Для Mistral Realtime текст появится во время разговора; остальные модели обновляются после чанка.</span></div>
       <h3>Сессии</h3>
       <div class="table-scroll"><table class="datatable"><thead><tr><th>Начало</th><th>Статус</th><th>Язык</th><th>Модель</th><th>Экспорт</th><th></th></tr></thead><tbody id="transcriptionSessions"></tbody></table></div>
     </div>
@@ -367,7 +367,7 @@
       </form>
       <div id="transcriptionKeyStatus" class="download-settings"></div>
       <div id="transcriptionSettingsStatus" class="hint">Загрузка настроек…</div>
-      <p class="hint">При выборе облака очищенный голосовой чанк отправляется выбранному провайдеру. Возможна тарификация согласно вашему аккаунту.</p>
+      <p class="hint">Mistral Realtime отправляет живой PCM-поток для субтитров, а очищенный минутный чанк используется для финального TXT/SRT. Возможна тарификация согласно вашему аккаунту.</p>
     </div>
   </article>
 

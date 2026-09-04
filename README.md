@@ -1,6 +1,6 @@
 # 🤖 Discord Bot
 
-Текущая версия: **1.16.0**. Подробное описание изменений — в
+Текущая версия: **1.17.0**. Подробное описание изменений — в
 [CHANGELOG.md](CHANGELOG.md).
 
 Discord-бот на discord.js/Bun: управление структурой сервера (роли, каналы, права),
@@ -127,7 +127,8 @@ docker compose exec discord-bot bun run src/deploy-commands.js
 после перезапуска не требуется.
 
 Там же доступны облачные OpenAI (`gpt-4o-mini-transcribe`,
-`gpt-4o-transcribe`, `whisper-1`) и Mistral (`voxtral-mini-latest`). Ключ можно
+`gpt-4o-transcribe`, `whisper-1`) и Mistral (`voxtral-mini-latest`,
+`voxtral-mini-transcribe-realtime-2602`). Ключ можно
 передать через `OPENAI_API_KEY`/`MISTRAL_API_KEY` в `.env` либо сохранить в
 панели. Панель хранит ключи зашифрованными в `data/`, показывает только маску и
 никогда не возвращает исходное значение браузеру. Для переносимого шифрования
@@ -137,6 +138,13 @@ docker compose exec discord-bot bun run src/deploy-commands.js
 Даже при облачной модели Discord-аудио сначала проходит локальный VAD/AEC:
 музыка бота удаляется до отправки очищенного чанка провайдеру. Использование
 облачного API может тарифицироваться провайдером.
+
+`Voxtral Mini Realtime` параллельно передаёт отдельный поток каждого говорящего
+как PCM s16le 16 kHz mono и показывает промежуточный текст в панели примерно раз
+в секунду. Минутный обработанный чанк остаётся авторитетным результатом для
+подписей говорящих, AEC и экспорта TXT/SRT; realtime-delta в экспорт не
+дублируются. Задержку можно настроить через
+`TRANSCRIPTION_REALTIME_DELAY_MS=240..5000` (по умолчанию `1000`).
 
 ---
 
@@ -162,6 +170,7 @@ YTDLP_POT_PROVIDER_URL=http://bgutil-provider:4416   # опционально
 OPENAI_API_KEY=                    # опционально; можно сохранить в панели
 MISTRAL_API_KEY=                   # опционально; можно сохранить в панели
 TRANSCRIPTION_SETTINGS_SECRET=     # рекомендуется для переносимого шифрования ключей
+TRANSCRIPTION_REALTIME_DELAY_MS=1000 # Mistral realtime target delay, 240-5000 мс
 ```
 
 ### Режимы Docker
@@ -223,7 +232,7 @@ Discord-сервера. Шаблон лежит в `config/structure.example.jso
 
 ### Docker
 ```bash
-docker compose up -d --build               # собрать/запустить 1.16.0 вместе с внутренним Cobalt
+docker compose up -d --build               # собрать/запустить 1.17.0 вместе с внутренним Cobalt
 docker compose --profile pot up -d --build # запустить вместе с PO Token Provider
 docker compose --profile server --profile pot up -d --build # VPS + Cloudflare
 docker compose down          # остановить и удалить контейнер

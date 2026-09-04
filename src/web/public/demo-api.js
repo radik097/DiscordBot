@@ -134,6 +134,7 @@
       { id: "whisper-1", label: "Whisper API", note: "совместимая модель" },
     ] },
     { id: "mistral", label: "Mistral", cloud: true, models: [
+      { id: "voxtral-mini-transcribe-realtime-2602", label: "Voxtral Mini Realtime", note: "живые субтитры + batch-финализация" },
       { id: "voxtral-mini-latest", label: "Voxtral Mini Transcribe", note: "актуальная batch-модель" },
     ] },
   ];
@@ -344,7 +345,8 @@
         id, guildId: DEMO_GUILD_ID, status: "recording", language: body.language || "auto",
         provider: body.provider || demoTranscriptionSettings.provider,
         model: body.model || demoTranscriptionSettings.model,
-        startedAt: now(), chunks: [], segments: [],
+        startedAt: now(), chunks: [], segments: [], liveSegments: [],
+        realtime: { enabled: body.model === "voxtral-mini-transcribe-realtime-2602", streams: 0, errors: [] },
       };
       demoTranscriptionSessions.unshift(copy(demoTranscription));
       return json(copy(demoTranscription), 201);

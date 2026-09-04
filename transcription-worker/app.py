@@ -1,3 +1,4 @@
+import asyncio
 import ctypes
 import gc
 import io
@@ -11,7 +12,16 @@ from threading import Lock
 
 import numpy as np
 import requests
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from mistralai.client import Mistral
+from mistralai.client.models import (
+    AudioFormat,
+    RealtimeTranscriptionError,
+    RealtimeTranscriptionSessionCreated,
+    TranscriptionStreamDone,
+    TranscriptionStreamTextDelta,
+)
+from mistralai.extra.realtime import UnknownRealtimeEvent
 from pydantic import BaseModel, Field
 from faster_whisper import WhisperModel
 
@@ -26,7 +36,11 @@ MODEL_CACHE = os.getenv("WHISPER_MODEL_CACHE", "/models")
 LOCAL_MODELS = {"tiny", "base", "small", "medium", "large-v3", "distil-large-v3"}
 CLOUD_MODELS = {
     "openai": {"gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"},
-    "mistral": {"voxtral-mini-latest"},
+    "mistral": {"voxtral-mini-latest", "voxtral-mini-transcribe-realtime-2602"},
+}
+MISTRAL_REALTIME_MODELS = {"voxtral-mini-transcribe-realtime-2602"}
+BATCH_MODEL_ALIASES = {
+    "voxtral-mini-transcribe-realtime-2602": "voxtral-mini-latest",
 }
 CLOUD_ENDPOINTS = {
     "openai": "https://api.openai.com/v1/audio/transcriptions",
@@ -260,7 +274,7 @@ def transcribe_cloud(audio: np.ndarray, language_mode: str, provider: str, model
     validate_profile(provider, model_name)
     if not api_key:
         raise HTTPException(400, "cloud provider API key is required")
-    data = {"model": model_name, "response_format": "json"}
+    data = {"model": BATCH_MODEL_ALIASES.get(model_name, model_name), "response_format": "json"}
     if language_mode != "auto":
         data["language"] = language_mode
     try:
@@ -303,6 +317,85 @@ def transcribe_cloud(audio: np.ndarray, language_mode: str, provider: str, model
             "coarse": True,
         })
     return result
+
+
+async def websocket_audio_stream(websocket: WebSocket):
+    while True:
+        message = await websocket.receive()
+        if message.get("type") == "websocket.disconnect":
+            return
+        audio = message.get("bytes")
+        if audio:
+            if len(audio) > 512 * 1024:
+                raise ValueError("realtime audio frame exceeds 512 KiB")
+            yield audio
+            continue
+        text = message.get("text")
+        if text:
+            try:
+                control = json.loads(text)
+            except ValueError:
+                control = {}
+            if control.get("type") == "stop":
+                return
+
+
+def realtime_event_payload(event):
+    if isinstance(event, RealtimeTranscriptionSessionCreated):
+        return {"type": "session"}
+    if isinstance(event, TranscriptionStreamTextDelta):
+        return {"type": "delta", "text": str(event.text or "")}
+    if isinstance(event, TranscriptionStreamDone):
+        return {"type": "done"}
+    if isinstance(event, RealtimeTranscriptionError):
+        return {"type": "error", "error": "Mistral realtime transcription error"}
+    if isinstance(event, UnknownRealtimeEvent):
+        return None
+    return None
+
+
+@app.websocket("/v1/realtime")
+async def realtime_transcription(websocket: WebSocket):
+    provider = websocket.headers.get("x-transcription-provider", "").strip().lower()
+    model_name = websocket.headers.get("x-transcription-model", "").strip()
+    authorization = websocket.headers.get("authorization", "")
+    api_key = authorization[7:].strip() if authorization.startswith("Bearer ") else ""
+    if provider != "mistral" or model_name not in MISTRAL_REALTIME_MODELS or not api_key:
+        await websocket.close(code=4400, reason="invalid realtime transcription profile")
+        return
+    try:
+        target_delay_ms = int(websocket.headers.get("x-transcription-delay-ms", "1000"))
+    except ValueError:
+        target_delay_ms = 1000
+    target_delay_ms = min(5_000, max(240, target_delay_ms))
+    await websocket.accept()
+    client = Mistral(api_key=api_key)
+    audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=SAMPLE_RATE)
+    try:
+        async for event in client.audio.realtime.transcribe_stream(
+            audio_stream=websocket_audio_stream(websocket),
+            model=model_name,
+            audio_format=audio_format,
+            target_streaming_delay_ms=target_delay_ms,
+        ):
+            payload = realtime_event_payload(event)
+            if payload:
+                await websocket.send_json(payload)
+            if payload and payload["type"] in {"done", "error"}:
+                break
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        print(f"Mistral realtime stream failed: {type(exc).__name__}", flush=True)
+        try:
+            await websocket.send_json({"type": "error", "error": "Mistral realtime stream failed"})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.get("/health")
